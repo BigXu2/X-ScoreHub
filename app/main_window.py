@@ -1,9 +1,10 @@
 import os
 from PyQt5.QtWidgets import (QMainWindow, QSplitter, QMenuBar, QAction,
                              QFileDialog, QMessageBox, QLineEdit, QTextEdit,
-                             QSpinBox, QAbstractSpinBox, QShortcut)
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QKeySequence
+                             QSpinBox, QAbstractSpinBox, QShortcut, QApplication,
+                             QWidget)
+from PyQt5.QtCore import Qt, QTimer, QEvent, QPointF
+from PyQt5.QtGui import QKeySequence, QNativeGestureEvent
 from app.widgets.song_list import SongListPanel
 from app.widgets.pdf_viewer import PdfViewerPanel
 from app.widgets.song_info import SongInfoPanel
@@ -20,6 +21,34 @@ class MainWindow(QMainWindow):
         self._selected_count = 0
         self._setup_menu()
         self._setup_ui()
+        self._install_pinch_filter()
+
+    def _install_pinch_filter(self):
+        """QApplication-level filter — the ONLY NativeGesture entry point.
+
+        macOS delivers NativeGesture events to random NSViews in the
+        widget tree.  A global filter on QApplication catches them
+        regardless of which NSView receives them, eliminating all
+        routing problems.
+        """
+        QApplication.instance().installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.NativeGesture:
+            canvas = self.pdf_viewer.canvas
+            # Map from the receiver to canvas — obj may be a QWindow
+            # (not a QWidget), so guard with isinstance.
+            try:
+                pos = event.posF() if hasattr(event, 'posF') else QPointF(event.pos())
+                if isinstance(obj, QWidget) and obj is not canvas:
+                    canvas_pos = canvas.mapFrom(obj, pos)
+                else:
+                    canvas_pos = pos
+            except (TypeError, AttributeError):
+                canvas_pos = QPointF(event.pos())
+            canvas._handle_native_gesture(event, canvas_pos)
+            return True
+        return super().eventFilter(obj, event)
 
     def _setup_menu(self):
         menubar = self.menuBar()

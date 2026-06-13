@@ -43,14 +43,6 @@ class ScoreCanvas(QWidget):
         self.grabGesture(Qt.PinchGesture)
 
     def event(self, event):
-        # Route NativeGesture through PdfViewerPanel to avoid duplicates
-        if event.type() == QEvent.NativeGesture:
-            p = self.parent()
-            while p and not isinstance(p, PdfViewerPanel):
-                p = p.parent()
-            if p:
-                p.event(event)
-                return True
         if event.type() == QEvent.Gesture:
             for gesture in event.gestures():
                 if isinstance(gesture, QPinchGesture):
@@ -311,16 +303,6 @@ class DualScoreCanvas(QWidget):
         self.grabGesture(Qt.PinchGesture)
 
     def event(self, event):
-        # Forward NativeGesture through the panel to guarantee single-call.
-        # (On macOS the event may arrive at this canvas NSView directly,
-        # bypassing PdfViewerPanel.event().)
-        if event.type() == QEvent.NativeGesture:
-            p = self.parent()
-            while p and not isinstance(p, PdfViewerPanel):
-                p = p.parent()
-            if p:
-                p.event(event)
-                return True
         if event.type() == QEvent.Gesture:
             for gesture in event.gestures():
                 if isinstance(gesture, QPinchGesture):
@@ -596,14 +578,6 @@ class PdfViewerPanel(QWidget):
         self._current_page_offset = 0
         self._fullscreen = False
         self._init_ui()
-
-    def event(self, event):
-        """Forward NativeGesture to active canvas — THE single entry point."""
-        if event.type() == QEvent.NativeGesture:
-            canvas_pos = self.canvas.mapFrom(self, QPointF(event.pos()))
-            self.canvas._handle_native_gesture(event, canvas_pos)
-            return True
-        return super().event(event)
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
