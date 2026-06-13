@@ -433,7 +433,7 @@ class PdfViewerPanel(QWidget):
         self.toggle_btn = QPushButton('切换显示模式')
         self.toggle_btn.clicked.connect(self.fullscreen_toggle_requested.emit)
         self.toggle_btn.setStyleSheet(
-            'QPushButton { min-height: 28px; font-size: 13px; }')
+            'QPushButton { padding: 4px 12px; font-size: 13px; }')
 
         nav_layout.addStretch()
         nav_layout.addWidget(self.prev_btn)
