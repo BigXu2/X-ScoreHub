@@ -14,6 +14,7 @@ RENDER_DPI = 200
 MIN_ZOOM = 1.0
 MAX_ZOOM = 8.0
 ZOOM_STEP = 0.12
+PINCH_SENSITIVITY = 8.0    # amplify macOS trackpad magnification deltas
 
 
 class ScoreCanvas(QWidget):
@@ -52,11 +53,11 @@ class ScoreCanvas(QWidget):
     def _handle_native_gesture(self, event: QNativeGestureEvent):
         """Handle macOS trackpad pinch-to-zoom via NativeGesture.
 
-        On macOS, value() wraps NSEvent.magnification — an INCREMENTAL
-        delta per event.  Positive = pinch out, negative = pinch in.
-        When fingers lift, the OS sends a burst of negative deltas
-        that sum back toward 0, so we track the peak absolute
-        accumulated value and ignore any retreat from it.
+        value() wraps NSEvent.magnification — a per-event delta that
+        is very small (±0.01–0.05).  We accumulate with a sensitivity
+        multiplier, operate on the peak to prevent snap-back on
+        finger lift, and apply hysteresis to avoid stutter from
+        expensive 200 DPI re-renders on every tiny event.
         """
         if not self._full_pixmap:
             return
@@ -65,18 +66,23 @@ class ScoreCanvas(QWidget):
             self._pinch_accum = 0.0
             self._pinch_peak = 0.0
             self._pinch_base_zoom = self._zoom
+            self._pinch_last_applied = 0.0
         elif gt == Qt.ZoomNativeGesture:
-            self._pinch_accum += event.value()
-            v = self._pinch_accum
+            self._pinch_accum += event.value() * PINCH_SENSITIVITY
+            # Track the extreme reached so far (largest |v|) — this
+            # is what we render, not the live (retreating) accum.
             peak = self._pinch_peak
-            # Only apply when |accumulated| is still growing — ignore
-            # the release-phase retreat that would bounce zoom back.
-            if abs(v) > abs(peak):
-                self._pinch_peak = v
-                scale = 1.0 + v
-                new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
-                               self._pinch_base_zoom * scale))
-                self._apply_zoom_at_point(new_zoom, QPointF(event.pos()))
+            if abs(self._pinch_accum) > abs(peak):
+                self._pinch_peak = self._pinch_accum
+            effective = self._pinch_peak
+            # Hysteresis: skip rebuild when change is negligible
+            if abs(effective - self._pinch_last_applied) < 0.015:
+                return
+            self._pinch_last_applied = effective
+            scale = 1.0 + effective
+            new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
+                           self._pinch_base_zoom * scale))
+            self._apply_zoom_at_point(new_zoom, QPointF(event.pos()))
         elif gt == Qt.EndNativeGesture:
             if self._zoom <= MIN_ZOOM + 0.001:
                 self._offset = QPointF(0, 0)
@@ -290,11 +296,11 @@ class DualScoreCanvas(QWidget):
     def _handle_native_gesture(self, event: QNativeGestureEvent):
         """Handle macOS trackpad pinch-to-zoom via NativeGesture.
 
-        On macOS, value() wraps NSEvent.magnification — an INCREMENTAL
-        delta per event.  Positive = pinch out, negative = pinch in.
-        When fingers lift, the OS sends a burst of negative deltas
-        that sum back toward 0, so we track the peak absolute
-        accumulated value and ignore any retreat from it.
+        value() wraps NSEvent.magnification — a per-event delta that
+        is very small (±0.01–0.05).  We accumulate with a sensitivity
+        multiplier, operate on the peak to prevent snap-back on
+        finger lift, and apply hysteresis to avoid stutter from
+        expensive 200 DPI re-renders on every tiny event.
         """
         if not self._full_left:
             return
@@ -303,16 +309,20 @@ class DualScoreCanvas(QWidget):
             self._pinch_accum = 0.0
             self._pinch_peak = 0.0
             self._pinch_base_zoom = self._zoom
+            self._pinch_last_applied = 0.0
         elif gt == Qt.ZoomNativeGesture:
-            self._pinch_accum += event.value()
-            v = self._pinch_accum
+            self._pinch_accum += event.value() * PINCH_SENSITIVITY
             peak = self._pinch_peak
-            if abs(v) > abs(peak):
-                self._pinch_peak = v
-                scale = 1.0 + v
-                new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
-                               self._pinch_base_zoom * scale))
-                self._apply_zoom_at_point(new_zoom, QPointF(event.pos()))
+            if abs(self._pinch_accum) > abs(peak):
+                self._pinch_peak = self._pinch_accum
+            effective = self._pinch_peak
+            if abs(effective - self._pinch_last_applied) < 0.015:
+                return
+            self._pinch_last_applied = effective
+            scale = 1.0 + effective
+            new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
+                           self._pinch_base_zoom * scale))
+            self._apply_zoom_at_point(new_zoom, QPointF(event.pos()))
         elif gt == Qt.EndNativeGesture:
             if self._zoom <= MIN_ZOOM + 0.001:
                 self._offset = QPointF(0, 0)
