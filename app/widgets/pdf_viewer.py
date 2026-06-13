@@ -2,9 +2,10 @@ import os
 import fitz
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QStackedWidget)
-from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal
+from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal, QEvent
 from PyQt5.QtGui import (QPixmap, QImage, QPainter, QMouseEvent,
                          QWheelEvent, QCursor)
+from PyQt5.QtWidgets import QGestureEvent, QPinchGesture
 
 PDF_REPO = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), 'pdf_repo')
@@ -27,10 +28,52 @@ class ScoreCanvas(QWidget):
         self._dragging = False
         self._drag_start = QPointF(0, 0)
         self._offset_start = QPointF(0, 0)
+        self._pinch_base_zoom = MIN_ZOOM  # zoom level at pinch start
+        self._pinch_active = False
         self.setMouseTracking(True)
         self.setCursor(Qt.OpenHandCursor)
         self.setStyleSheet('background-color: #e0e0e0; border: none;')
         self.setMinimumSize(200, 200)
+        self.grabGesture(Qt.PinchGesture)
+
+    def event(self, event):
+        if event.type() == QEvent.Gesture:
+            for gesture in event.gestures():
+                if isinstance(gesture, QPinchGesture):
+                    self._handle_pinch(gesture)
+            return True
+        return super().event(event)
+
+    def _handle_pinch(self, gesture):
+        """Apply pinch-to-zoom from a QPinchGesture."""
+        if not self._full_pixmap:
+            return
+        if gesture.state() == Qt.GestureStarted:
+            self._pinch_base_zoom = self._zoom
+            self._pinch_active = True
+        elif gesture.state() == Qt.GestureUpdated and self._pinch_active:
+            scale = gesture.scaleFactor()
+            new_zoom = max(MIN_ZOOM, min(MAX_ZOOM, self._pinch_base_zoom * scale))
+            center = gesture.centerPoint()
+            self._apply_zoom_at_point(new_zoom, QPointF(center.x(), center.y()))
+        elif gesture.state() in (Qt.GestureFinished, Qt.GestureCanceled):
+            self._pinch_active = False
+            if self._zoom <= MIN_ZOOM + 0.001:
+                self._offset = QPointF(0, 0)
+
+    def _apply_zoom_at_point(self, new_zoom, widget_pos: QPointF):
+        """Zoom to *new_zoom*, keeping *widget_pos* stationary on screen."""
+        old_zoom = self._zoom
+        if new_zoom == old_zoom:
+            return
+        self._zoom = new_zoom
+        ratio = new_zoom / old_zoom
+        center = QPointF(self.width() / 2.0, self.height() / 2.0)
+        rel = widget_pos - center
+        self._offset = self._offset * ratio + rel * (1.0 - ratio)
+        self._clamp_offset()
+        self._rebuild_display()
+        self.update()
 
     def set_page(self, full_pixmap):
         """Set a new high-DPI pixmap, reset zoom/pan to fit."""
@@ -86,30 +129,16 @@ class ScoreCanvas(QWidget):
         if not self._full_pixmap:
             return
         pos = event.posF() if hasattr(event, 'posF') else QPointF(event.pos())
-        old_zoom = self._zoom
-
         delta = event.angleDelta().y()
         if delta > 0:
-            self._zoom = min(MAX_ZOOM, self._zoom + ZOOM_STEP)
+            new_zoom = min(MAX_ZOOM, self._zoom + ZOOM_STEP)
         elif delta < 0:
-            self._zoom = max(MIN_ZOOM, self._zoom - ZOOM_STEP)
-
-        if self._zoom == old_zoom:
+            new_zoom = max(MIN_ZOOM, self._zoom - ZOOM_STEP)
+        else:
             return
-
-        # Zoom centered on cursor position
-        # new_offset = old_offset * (new/old) + cursor_from_center * (1 - new/old)
-        ratio = self._zoom / old_zoom
-        center = QPointF(self.width() / 2.0, self.height() / 2.0)
-        rel = pos - center  # cursor relative to widget center
-        self._offset = self._offset * ratio + rel * (1.0 - ratio)
-
+        self._apply_zoom_at_point(new_zoom, pos)
         if self._zoom <= MIN_ZOOM + 0.001:
             self._offset = QPointF(0, 0)
-
-        self._clamp_offset()
-        self._rebuild_display()
-        self.update()
 
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton and self._zoom > MIN_ZOOM + 0.001:
@@ -199,11 +228,53 @@ class DualScoreCanvas(QWidget):
         self._dragging = False
         self._drag_start = QPointF(0, 0)
         self._offset_start = QPointF(0, 0)
+        self._pinch_base_zoom = MIN_ZOOM
+        self._pinch_active = False
         self._single_page = True
         self.setMouseTracking(True)
         self.setCursor(Qt.OpenHandCursor)
         self.setStyleSheet('background-color: #e0e0e0; border: none;')
         self.setMinimumSize(200, 200)
+        self.grabGesture(Qt.PinchGesture)
+
+    def event(self, event):
+        if event.type() == QEvent.Gesture:
+            for gesture in event.gestures():
+                if isinstance(gesture, QPinchGesture):
+                    self._handle_pinch(gesture)
+            return True
+        return super().event(event)
+
+    def _handle_pinch(self, gesture):
+        """Apply pinch-to-zoom from a QPinchGesture."""
+        if not self._full_left:
+            return
+        if gesture.state() == Qt.GestureStarted:
+            self._pinch_base_zoom = self._zoom
+            self._pinch_active = True
+        elif gesture.state() == Qt.GestureUpdated and self._pinch_active:
+            scale = gesture.scaleFactor()
+            new_zoom = max(MIN_ZOOM, min(MAX_ZOOM, self._pinch_base_zoom * scale))
+            center = gesture.centerPoint()
+            self._apply_zoom_at_point(new_zoom, QPointF(center.x(), center.y()))
+        elif gesture.state() in (Qt.GestureFinished, Qt.GestureCanceled):
+            self._pinch_active = False
+            if self._zoom <= MIN_ZOOM + 0.001:
+                self._offset = QPointF(0, 0)
+
+    def _apply_zoom_at_point(self, new_zoom, widget_pos: QPointF):
+        """Zoom to *new_zoom*, keeping *widget_pos* stationary on screen."""
+        old_zoom = self._zoom
+        if new_zoom == old_zoom:
+            return
+        self._zoom = new_zoom
+        ratio = new_zoom / old_zoom
+        center = QPointF(self.width() / 2.0, self.height() / 2.0)
+        rel = widget_pos - center
+        self._offset = self._offset * ratio + rel * (1.0 - ratio)
+        self._clamp_offset()
+        self._rebuild_display()
+        self.update()
 
     def set_page(self, left_pixmap, right_pixmap=None):
         """Set pages for display.
@@ -333,28 +404,16 @@ class DualScoreCanvas(QWidget):
         if not self._full_left:
             return
         pos = event.posF() if hasattr(event, 'posF') else QPointF(event.pos())
-        old_zoom = self._zoom
-
         delta = event.angleDelta().y()
         if delta > 0:
-            self._zoom = min(MAX_ZOOM, self._zoom + ZOOM_STEP)
+            new_zoom = min(MAX_ZOOM, self._zoom + ZOOM_STEP)
         elif delta < 0:
-            self._zoom = max(MIN_ZOOM, self._zoom - ZOOM_STEP)
-
-        if self._zoom == old_zoom:
+            new_zoom = max(MIN_ZOOM, self._zoom - ZOOM_STEP)
+        else:
             return
-
-        ratio = self._zoom / old_zoom
-        center = QPointF(self.width() / 2.0, self.height() / 2.0)
-        rel = pos - center
-        self._offset = self._offset * ratio + rel * (1.0 - ratio)
-
+        self._apply_zoom_at_point(new_zoom, pos)
         if self._zoom <= MIN_ZOOM + 0.001:
             self._offset = QPointF(0, 0)
-
-        self._clamp_offset()
-        self._rebuild_display()
-        self.update()
 
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton and self._zoom > MIN_ZOOM + 0.001:
