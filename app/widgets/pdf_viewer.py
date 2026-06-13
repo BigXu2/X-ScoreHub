@@ -15,8 +15,8 @@ RENDER_DPI = 200
 MIN_ZOOM = 1.0
 MAX_ZOOM = 8.0
 ZOOM_STEP = 0.12
-PINCH_SENSITIVITY = 1.5    # amplify accumulated deltas (accum reaches ~1-2)
-_REBUILD_INTERVAL_MS = 33  # throttle display rebuilds during pinch (~30 fps)
+PINCH_SENSITIVITY = 3.0    # amplify accumulated deltas (accum reaches ~1-2)
+_REBUILD_INTERVAL_MS = 20  # throttle display rebuilds during pinch (~50 fps)
 
 
 class ScoreCanvas(QWidget):
@@ -70,11 +70,14 @@ class ScoreCanvas(QWidget):
             self._pinch_smooth = 0.0
             self._pinch_active = True
         elif gt == Qt.ZoomNativeGesture:
-            # Throttle before any state change: old pixmap + new offset = ghost
-            if now - self._last_rebuild_ms < _REBUILD_INTERVAL_MS:
-                return
+            # Always accrue: losing events starves the accumulator
             self._pinch_accum += event.value()
             self._pinch_smooth = self._pinch_smooth * 0.70 + self._pinch_accum * 0.30
+
+            # Throttle rendering only — zoom state is always up to date
+            if now - self._last_rebuild_ms < _REBUILD_INTERVAL_MS:
+                return
+
             v = self._pinch_smooth * PINCH_SENSITIVITY
             scale = math.pow(2.0, v)
             new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
@@ -339,11 +342,14 @@ class DualScoreCanvas(QWidget):
             self._pinch_smooth = 0.0
             self._pinch_active = True
         elif gt == Qt.ZoomNativeGesture:
-            # Throttle before any state change: old pixmap + new offset = ghost
-            if now - self._last_rebuild_ms < _REBUILD_INTERVAL_MS:
-                return
+            # Always accrue: losing events starves the accumulator
             self._pinch_accum += event.value()
             self._pinch_smooth = self._pinch_smooth * 0.70 + self._pinch_accum * 0.30
+
+            # Throttle rendering only — zoom state is always up to date
+            if now - self._last_rebuild_ms < _REBUILD_INTERVAL_MS:
+                return
+
             v = self._pinch_smooth * PINCH_SENSITIVITY
             scale = math.pow(2.0, v)
             new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
