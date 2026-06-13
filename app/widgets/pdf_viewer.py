@@ -16,7 +16,7 @@ RENDER_DPI = 200
 MIN_ZOOM = 1.0
 MAX_ZOOM = 8.0
 ZOOM_STEP = 0.12
-PINCH_SENSITIVITY = 28.0   # amplify macOS cumulative magnification → zoom factor
+PINCH_SENSITIVITY = 40.0   # amplify macOS cumulative magnification → zoom factor
 _REBUILD_INTERVAL_MS = 33  # throttle display rebuilds during pinch (~30 fps)
 
 
@@ -57,10 +57,10 @@ class ScoreCanvas(QWidget):
     def _handle_native_gesture(self, event, anchor_pos=None):
         """Handle macOS trackpad pinch-to-zoom via NativeGesture.
 
-        Uses the live magnification value directly (no peak tracking).
-        At high sensitivity the value range is wide enough that the
-        natural release-phase return to 0 becomes a smooth spring-back
-        rather than a jarring snap.
+        Peak-tracked + EMA-smoothed.  The peak (largest |raw|) is
+        monotonic → no direction reversals mid-gesture.  EMA
+        interpolates toward the peak → no stutter, no sudden jumps.
+        Zoom locks at final level when the gesture ends.
         """
         if not self._full_pixmap:
             return
@@ -71,9 +71,17 @@ class ScoreCanvas(QWidget):
                               else QPointF(event.pos()))
             self._pinch_anchor = anchor_pos
             self._pinch_base_zoom = self._zoom
+            self._pinch_v_peak = 0.0
+            self._pinch_v_smooth = 0.0
             self._pinch_active = True
         elif gt == Qt.ZoomNativeGesture:
-            v = event.value() * PINCH_SENSITIVITY
+            v_raw = event.value() * PINCH_SENSITIVITY
+            # Monotonic peak: only grows in magnitude, never reverses
+            if abs(v_raw) > abs(self._pinch_v_peak):
+                self._pinch_v_peak = v_raw
+            # EMA-smooth toward the peak — smooth but never reverses
+            self._pinch_v_smooth = self._pinch_v_smooth * 0.55 + self._pinch_v_peak * 0.45
+            v = self._pinch_v_smooth
             scale = math.pow(2.0, v)
             new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
                            self._pinch_base_zoom * scale))
@@ -313,7 +321,7 @@ class DualScoreCanvas(QWidget):
     def _handle_native_gesture(self, event, anchor_pos=None):
         """Handle macOS trackpad pinch-to-zoom via NativeGesture.
 
-        Uses the live magnification value directly (no peak tracking).
+        Peak-tracked + EMA-smoothed — monotonic, no reversals.
         """
         if not self._full_left:
             return
@@ -324,9 +332,15 @@ class DualScoreCanvas(QWidget):
                               else QPointF(event.pos()))
             self._pinch_anchor = anchor_pos
             self._pinch_base_zoom = self._zoom
+            self._pinch_v_peak = 0.0
+            self._pinch_v_smooth = 0.0
             self._pinch_active = True
         elif gt == Qt.ZoomNativeGesture:
-            v = event.value() * PINCH_SENSITIVITY
+            v_raw = event.value() * PINCH_SENSITIVITY
+            if abs(v_raw) > abs(self._pinch_v_peak):
+                self._pinch_v_peak = v_raw
+            self._pinch_v_smooth = self._pinch_v_smooth * 0.55 + self._pinch_v_peak * 0.45
+            v = self._pinch_v_smooth
             scale = math.pow(2.0, v)
             new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
                            self._pinch_base_zoom * scale))
