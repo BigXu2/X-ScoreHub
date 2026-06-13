@@ -65,6 +65,7 @@ class ScoreCanvas(QWidget):
                               else QPointF(event.pos()))
             self._pinch_anchor = anchor_pos
             self._pinch_base_zoom = self._zoom
+            self._pinch_base_offset = QPointF(self._offset)
             self._pinch_accum = 0.0
             self._pinch_smooth = 0.0
             self._pinch_active = True
@@ -75,7 +76,7 @@ class ScoreCanvas(QWidget):
             scale = math.pow(2.0, v)
             new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
                            self._pinch_base_zoom * scale))
-            self._apply_zoom_at_point(new_zoom, self._pinch_anchor)
+            self._apply_zoom_from_base(new_zoom, self._pinch_anchor)
         elif gt == Qt.EndNativeGesture:
             self._pinch_active = False
             self._rebuild_display(force=True)
@@ -110,6 +111,20 @@ class ScoreCanvas(QWidget):
         center = QPointF(self.width() / 2.0, self.height() / 2.0)
         rel = widget_pos - center
         self._offset = self._offset * ratio + rel * (1.0 - ratio)
+        self._clamp_offset()
+        self._rebuild_display()
+        self.update()
+
+    def _apply_zoom_from_base(self, new_zoom, widget_pos: QPointF):
+        """Zoom from frozen gesture-start offset — no drift across frames."""
+        old_zoom = self._pinch_base_zoom
+        if new_zoom == old_zoom:
+            return
+        self._zoom = new_zoom
+        ratio = new_zoom / old_zoom
+        center = QPointF(self.width() / 2.0, self.height() / 2.0)
+        rel = widget_pos - center
+        self._offset = self._pinch_base_offset * ratio + rel * (1.0 - ratio)
         self._clamp_offset()
         self._rebuild_display()
         self.update()
@@ -324,6 +339,7 @@ class DualScoreCanvas(QWidget):
                               else QPointF(event.pos()))
             self._pinch_anchor = anchor_pos
             self._pinch_base_zoom = self._zoom
+            self._pinch_base_offset = QPointF(self._offset)
             self._pinch_accum = 0.0
             self._pinch_smooth = 0.0
             self._pinch_active = True
@@ -334,7 +350,7 @@ class DualScoreCanvas(QWidget):
             scale = math.pow(2.0, v)
             new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
                            self._pinch_base_zoom * scale))
-            self._apply_zoom_at_point(new_zoom, self._pinch_anchor)
+            self._apply_zoom_from_base(new_zoom, self._pinch_anchor)
         elif gt == Qt.EndNativeGesture:
             self._pinch_active = False
             self._rebuild_display(force=True)
@@ -369,6 +385,20 @@ class DualScoreCanvas(QWidget):
         center = QPointF(self.width() / 2.0, self.height() / 2.0)
         rel = widget_pos - center
         self._offset = self._offset * ratio + rel * (1.0 - ratio)
+        self._clamp_offset()
+        self._rebuild_display()
+        self.update()
+
+    def _apply_zoom_from_base(self, new_zoom, widget_pos: QPointF):
+        """Zoom from frozen gesture-start offset — no drift across frames."""
+        old_zoom = self._pinch_base_zoom
+        if new_zoom == old_zoom:
+            return
+        self._zoom = new_zoom
+        ratio = new_zoom / old_zoom
+        center = QPointF(self.width() / 2.0, self.height() / 2.0)
+        rel = widget_pos - center
+        self._offset = self._pinch_base_offset * ratio + rel * (1.0 - ratio)
         self._clamp_offset()
         self._rebuild_display()
         self.update()
