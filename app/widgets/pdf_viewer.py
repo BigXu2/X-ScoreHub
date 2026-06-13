@@ -57,16 +57,18 @@ class ScoreCanvas(QWidget):
     def _handle_native_gesture(self, event, anchor_pos=None):
         """Handle macOS trackpad pinch-to-zoom via NativeGesture.
 
-        anchor_pos: canvas-relative QPointF from panel forwarding,
-        or None to fall back to event.pos().
+        The anchor point is captured once at GestureStart and reused
+        throughout, keeping the zoom center rock-steady — just like
+        wheel-zoom stays fixed on the cursor position.
         """
         if not self._full_pixmap:
             return
-        if anchor_pos is None:
-            anchor_pos = (event.posF() if hasattr(event, 'posF')
-                          else QPointF(event.pos()))
         gt = event.gestureType()
         if gt == Qt.BeginNativeGesture:
+            if anchor_pos is None:
+                anchor_pos = (event.posF() if hasattr(event, 'posF')
+                              else QPointF(event.pos()))
+            self._pinch_anchor = anchor_pos
             self._pinch_peak = 0.0
             self._pinch_base_zoom = self._zoom
             self._pinch_active = True
@@ -78,7 +80,7 @@ class ScoreCanvas(QWidget):
             scale = math.pow(2.0, v)
             new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
                            self._pinch_base_zoom * scale))
-            self._apply_zoom_at_point(new_zoom, anchor_pos)
+            self._apply_zoom_at_point(new_zoom, self._pinch_anchor)
         elif gt == Qt.EndNativeGesture:
             self._pinch_active = False
             self._rebuild_display(force=True)
@@ -316,16 +318,17 @@ class DualScoreCanvas(QWidget):
     def _handle_native_gesture(self, event, anchor_pos=None):
         """Handle macOS trackpad pinch-to-zoom via NativeGesture.
 
-        anchor_pos: canvas-relative QPointF from panel forwarding,
-        or None to fall back to event.pos().
+        The anchor point is captured once at GestureStart and reused
+        throughout, keeping the zoom center rock-steady.
         """
         if not self._full_left:
             return
-        if anchor_pos is None:
-            anchor_pos = (event.posF() if hasattr(event, 'posF')
-                          else QPointF(event.pos()))
         gt = event.gestureType()
         if gt == Qt.BeginNativeGesture:
+            if anchor_pos is None:
+                anchor_pos = (event.posF() if hasattr(event, 'posF')
+                              else QPointF(event.pos()))
+            self._pinch_anchor = anchor_pos
             self._pinch_peak = 0.0
             self._pinch_base_zoom = self._zoom
             self._pinch_active = True
@@ -337,7 +340,7 @@ class DualScoreCanvas(QWidget):
             scale = math.pow(2.0, v)
             new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
                            self._pinch_base_zoom * scale))
-            self._apply_zoom_at_point(new_zoom, anchor_pos)
+            self._apply_zoom_at_point(new_zoom, self._pinch_anchor)
         elif gt == Qt.EndNativeGesture:
             self._pinch_active = False
             self._rebuild_display(force=True)
