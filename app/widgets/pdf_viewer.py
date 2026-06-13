@@ -70,6 +70,9 @@ class ScoreCanvas(QWidget):
             self._pinch_smooth = 0.0
             self._pinch_active = True
         elif gt == Qt.ZoomNativeGesture:
+            # Throttle before any state change: old pixmap + new offset = ghost
+            if now - self._last_rebuild_ms < _REBUILD_INTERVAL_MS:
+                return
             self._pinch_accum += event.value()
             self._pinch_smooth = self._pinch_smooth * 0.70 + self._pinch_accum * 0.30
             v = self._pinch_smooth * PINCH_SENSITIVITY
@@ -113,6 +116,7 @@ class ScoreCanvas(QWidget):
         self._offset = self._offset * ratio + rel * (1.0 - ratio)
         self._clamp_offset()
         self._rebuild_display()
+        self._last_rebuild_ms = QDateTime.currentMSecsSinceEpoch()
         self.update()
 
     def _apply_zoom_from_base(self, new_zoom, widget_pos: QPointF):
@@ -127,6 +131,7 @@ class ScoreCanvas(QWidget):
         self._offset = self._pinch_base_offset * ratio + rel * (1.0 - ratio)
         self._clamp_offset()
         self._rebuild_display()
+        self._last_rebuild_ms = QDateTime.currentMSecsSinceEpoch()
         self.update()
 
     def set_page(self, full_pixmap):
@@ -158,20 +163,12 @@ class ScoreCanvas(QWidget):
     def _rebuild_display(self, force=False):
         """Rebuild _display_pixmap at current zoom level.
 
-        During an active pinch gesture, the method is throttled to
-        avoid stuttering from expensive 200 DPI SmoothTransformation,
-        and uses FastTransformation for speed.  A final high-quality
-        rebuild is forced when the gesture ends (force=True).
+        Uses FastTransformation during pinch for speed,
+        SmoothTransformation when idle for quality.
         """
         if not self._full_pixmap:
             self._display_pixmap = None
             return
-
-        # ── throttle during active pinch ──
-        now = QDateTime.currentMSecsSinceEpoch()
-        if self._pinch_active and not force:
-            if now - self._last_rebuild_ms < _REBUILD_INTERVAL_MS:
-                return
 
         bw, bh = self._base_size()
         tw = int(bw * self._zoom)
@@ -180,12 +177,10 @@ class ScoreCanvas(QWidget):
             self._display_pixmap = None
             return
 
-        # Fast (bilinear) during pinch, smooth (bicubic) otherwise
         mode = Qt.FastTransformation if (self._pinch_active and not force) \
                else Qt.SmoothTransformation
         self._display_pixmap = self._full_pixmap.scaled(
             tw, th, Qt.KeepAspectRatio, mode)
-        self._last_rebuild_ms = now
 
     def _image_pos_at(self, widget_pos):
         """Convert widget coordinate to image coordinate (zoom=1.0 space)."""
@@ -344,6 +339,9 @@ class DualScoreCanvas(QWidget):
             self._pinch_smooth = 0.0
             self._pinch_active = True
         elif gt == Qt.ZoomNativeGesture:
+            # Throttle before any state change: old pixmap + new offset = ghost
+            if now - self._last_rebuild_ms < _REBUILD_INTERVAL_MS:
+                return
             self._pinch_accum += event.value()
             self._pinch_smooth = self._pinch_smooth * 0.70 + self._pinch_accum * 0.30
             v = self._pinch_smooth * PINCH_SENSITIVITY
@@ -387,6 +385,7 @@ class DualScoreCanvas(QWidget):
         self._offset = self._offset * ratio + rel * (1.0 - ratio)
         self._clamp_offset()
         self._rebuild_display()
+        self._last_rebuild_ms = QDateTime.currentMSecsSinceEpoch()
         self.update()
 
     def _apply_zoom_from_base(self, new_zoom, widget_pos: QPointF):
@@ -401,6 +400,7 @@ class DualScoreCanvas(QWidget):
         self._offset = self._pinch_base_offset * ratio + rel * (1.0 - ratio)
         self._clamp_offset()
         self._rebuild_display()
+        self._last_rebuild_ms = QDateTime.currentMSecsSinceEpoch()
         self.update()
 
     def set_page(self, left_pixmap, right_pixmap=None):
@@ -457,18 +457,12 @@ class DualScoreCanvas(QWidget):
     def _rebuild_display(self, force=False):
         """Rebuild display pixmaps at current zoom level.
 
-        During pinch: throttled (max ~33 fps) + FastTransformation.
-        Gesture end (force=True): final SmoothTransformation render.
+        FastTransformation during pinch, SmoothTransformation otherwise.
         """
         if not self._full_left:
             self._display_left = None
             self._display_right = None
             return
-
-        now = QDateTime.currentMSecsSinceEpoch()
-        if self._pinch_active and not force:
-            if now - self._last_rebuild_ms < _REBUILD_INTERVAL_MS:
-                return
 
         bw, bh = self._base_size()
         zoom = self._zoom
@@ -495,8 +489,6 @@ class DualScoreCanvas(QWidget):
         else:
             self._display_right = None
             self._display_gap = 0
-
-        self._last_rebuild_ms = now
 
     def _total_display_size(self):
         """Return (width, height) of the rendered spread in display pixels."""
