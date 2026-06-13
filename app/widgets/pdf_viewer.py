@@ -50,14 +50,32 @@ class ScoreCanvas(QWidget):
         return super().event(event)
 
     def _handle_native_gesture(self, event: QNativeGestureEvent):
-        """Handle macOS trackpad pinch-to-zoom via NativeGesture."""
+        """Handle macOS trackpad pinch-to-zoom via NativeGesture.
+
+        On macOS, value() is a cumulative magnification factor that
+        starts at 0 on BeginNativeGesture and returns toward 0 when
+        fingers lift.  We record the base zoom at gesture start and
+        apply exponential smoothing to suppress trackpad jitter.
+        """
         if not self._full_pixmap:
             return
-        if event.gestureType() == Qt.ZoomNativeGesture:
-            # value() is the magnification delta since last event
-            delta = event.value()
-            new_zoom = max(MIN_ZOOM, min(MAX_ZOOM, self._zoom * (1.0 + delta)))
+        gt = event.gestureType()
+        if gt == Qt.BeginNativeGesture:
+            self._pinch_base_zoom = self._zoom
+            self._pinch_smooth_scale = 1.0
+        elif gt == Qt.ZoomNativeGesture:
+            # value() is cumulative magnification since gesture began
+            raw_scale = 1.0 + event.value()
+            # Exponential smoothing — blend 55% old / 45% new
+            self._pinch_smooth_scale = (
+                self._pinch_smooth_scale * 0.55 + raw_scale * 0.45)
+            new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
+                           self._pinch_base_zoom * self._pinch_smooth_scale))
             self._apply_zoom_at_point(new_zoom, QPointF(event.pos()))
+        elif gt == Qt.EndNativeGesture:
+            # Gesture ended — keep current zoom level
+            if self._zoom <= MIN_ZOOM + 0.001:
+                self._offset = QPointF(0, 0)
 
     def _handle_pinch(self, gesture):
         """Apply pinch-to-zoom from a QPinchGesture (touchscreen / cross-platform fallback)."""
@@ -266,13 +284,29 @@ class DualScoreCanvas(QWidget):
         return super().event(event)
 
     def _handle_native_gesture(self, event: QNativeGestureEvent):
-        """Handle macOS trackpad pinch-to-zoom via NativeGesture."""
+        """Handle macOS trackpad pinch-to-zoom via NativeGesture.
+
+        On macOS, value() is a cumulative magnification factor that
+        starts at 0 on BeginNativeGesture and returns toward 0 when
+        fingers lift.  We record the base zoom at gesture start and
+        apply exponential smoothing to suppress trackpad jitter.
+        """
         if not self._full_left:
             return
-        if event.gestureType() == Qt.ZoomNativeGesture:
-            delta = event.value()
-            new_zoom = max(MIN_ZOOM, min(MAX_ZOOM, self._zoom * (1.0 + delta)))
+        gt = event.gestureType()
+        if gt == Qt.BeginNativeGesture:
+            self._pinch_base_zoom = self._zoom
+            self._pinch_smooth_scale = 1.0
+        elif gt == Qt.ZoomNativeGesture:
+            raw_scale = 1.0 + event.value()
+            self._pinch_smooth_scale = (
+                self._pinch_smooth_scale * 0.55 + raw_scale * 0.45)
+            new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
+                           self._pinch_base_zoom * self._pinch_smooth_scale))
             self._apply_zoom_at_point(new_zoom, QPointF(event.pos()))
+        elif gt == Qt.EndNativeGesture:
+            if self._zoom <= MIN_ZOOM + 0.001:
+                self._offset = QPointF(0, 0)
 
     def _handle_pinch(self, gesture):
         """Apply pinch-to-zoom from a QPinchGesture (touchscreen fallback)."""
