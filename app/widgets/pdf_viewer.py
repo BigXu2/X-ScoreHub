@@ -54,15 +54,22 @@ class ScoreCanvas(QWidget):
             return True
         return super().event(event)
 
-    def _handle_native_gesture(self, event: QNativeGestureEvent):
-        """Handle macOS trackpad pinch-to-zoom via NativeGesture."""
+    def _handle_native_gesture(self, event, anchor_pos=None):
+        """Handle macOS trackpad pinch-to-zoom via NativeGesture.
+
+        anchor_pos: canvas-relative QPointF from panel forwarding,
+        or None to fall back to event.pos().
+        """
         if not self._full_pixmap:
             return
+        if anchor_pos is None:
+            anchor_pos = (event.posF() if hasattr(event, 'posF')
+                          else QPointF(event.pos()))
         gt = event.gestureType()
         if gt == Qt.BeginNativeGesture:
             self._pinch_peak = 0.0
             self._pinch_base_zoom = self._zoom
-            self._pinch_active = True          # enable throttle + fast scaling
+            self._pinch_active = True
         elif gt == Qt.ZoomNativeGesture:
             v = event.value() * PINCH_SENSITIVITY
             if abs(v) <= abs(self._pinch_peak):
@@ -71,10 +78,9 @@ class ScoreCanvas(QWidget):
             scale = math.pow(2.0, v)
             new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
                            self._pinch_base_zoom * scale))
-            self._apply_zoom_at_point(new_zoom, QPointF(event.pos()))
+            self._apply_zoom_at_point(new_zoom, anchor_pos)
         elif gt == Qt.EndNativeGesture:
-            self._pinch_active = False         # gesture ended
-            # Force one final smooth (high-quality) render
+            self._pinch_active = False
             self._rebuild_display(force=True)
             self.update()
             if self._zoom <= MIN_ZOOM + 0.001:
@@ -307,10 +313,17 @@ class DualScoreCanvas(QWidget):
             return True
         return super().event(event)
 
-    def _handle_native_gesture(self, event: QNativeGestureEvent):
-        """Handle macOS trackpad pinch-to-zoom via NativeGesture."""
+    def _handle_native_gesture(self, event, anchor_pos=None):
+        """Handle macOS trackpad pinch-to-zoom via NativeGesture.
+
+        anchor_pos: canvas-relative QPointF from panel forwarding,
+        or None to fall back to event.pos().
+        """
         if not self._full_left:
             return
+        if anchor_pos is None:
+            anchor_pos = (event.posF() if hasattr(event, 'posF')
+                          else QPointF(event.pos()))
         gt = event.gestureType()
         if gt == Qt.BeginNativeGesture:
             self._pinch_peak = 0.0
@@ -324,7 +337,7 @@ class DualScoreCanvas(QWidget):
             scale = math.pow(2.0, v)
             new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
                            self._pinch_base_zoom * scale))
-            self._apply_zoom_at_point(new_zoom, QPointF(event.pos()))
+            self._apply_zoom_at_point(new_zoom, anchor_pos)
         elif gt == Qt.EndNativeGesture:
             self._pinch_active = False
             self._rebuild_display(force=True)
@@ -574,10 +587,13 @@ class PdfViewerPanel(QWidget):
 
         NativeGesture events on macOS may not reliably propagate to
         child widgets nested inside QStackedWidget.  Handling them
-        at the panel level guarantees delivery.
+        at the panel level guarantees delivery.  We also remap the
+        event position into canvas coordinates so the zoom anchor
+        point is correct.
         """
         if event.type() == QEvent.NativeGesture:
-            self.canvas._handle_native_gesture(event)
+            canvas_pos = self.canvas.mapFrom(self, QPointF(event.pos()))
+            self.canvas._handle_native_gesture(event, canvas_pos)
             return True
         return super().event(event)
 
@@ -589,7 +605,8 @@ class PdfViewerPanel(QWidget):
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.NativeGesture:
-            self.canvas._handle_native_gesture(event)
+            canvas_pos = self.canvas.mapFromGlobal(event.globalPos())
+            self.canvas._handle_native_gesture(event, canvas_pos)
             return True
         return super().eventFilter(obj, event)
 
