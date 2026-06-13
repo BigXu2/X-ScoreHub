@@ -536,7 +536,20 @@ class PdfViewerPanel(QWidget):
         self._current_song = None
         self._current_page_offset = 0
         self._fullscreen = False
+        self.setAttribute(Qt.WA_AcceptTouchEvents, True)
         self._init_ui()
+
+    def event(self, event):
+        """Catch NativeGesture at the panel level and forward to active canvas.
+
+        On macOS, NativeGesture events may not propagate reliably to
+        child widgets nested inside QStackedWidget.  Handling them
+        here guarantees the active canvas always receives them.
+        """
+        if event.type() == QEvent.NativeGesture:
+            self.canvas._handle_native_gesture(event)
+            return True
+        return super().event(event)
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
