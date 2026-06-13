@@ -53,11 +53,6 @@ class ScoreCanvas(QWidget):
     def _handle_native_gesture(self, event, anchor_pos=None):
         if not self._full_pixmap:
             return
-        # Dedup: macOS may deliver same gesture to multiple NSViews
-        now = QDateTime.currentMSecsSinceEpoch()
-        if now - self._last_gesture_ms < 2:
-            return
-        self._last_gesture_ms = now
         gt = event.gestureType()
         if gt == Qt.BeginNativeGesture:
             if anchor_pos is None:
@@ -70,14 +65,8 @@ class ScoreCanvas(QWidget):
             self._pinch_smooth = 0.0
             self._pinch_active = True
         elif gt == Qt.ZoomNativeGesture:
-            # Always accrue: losing events starves the accumulator
             self._pinch_accum += event.value()
             self._pinch_smooth = self._pinch_smooth * 0.70 + self._pinch_accum * 0.30
-
-            # Throttle rendering only — zoom state is always up to date
-            if now - self._last_rebuild_ms < _REBUILD_INTERVAL_MS:
-                return
-
             v = self._pinch_smooth * PINCH_SENSITIVITY
             scale = math.pow(2.0, v)
             new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
@@ -326,10 +315,6 @@ class DualScoreCanvas(QWidget):
     def _handle_native_gesture(self, event, anchor_pos=None):
         if not self._full_left:
             return
-        now = QDateTime.currentMSecsSinceEpoch()
-        if now - self._last_gesture_ms < 2:
-            return
-        self._last_gesture_ms = now
         gt = event.gestureType()
         if gt == Qt.BeginNativeGesture:
             if anchor_pos is None:
@@ -342,14 +327,8 @@ class DualScoreCanvas(QWidget):
             self._pinch_smooth = 0.0
             self._pinch_active = True
         elif gt == Qt.ZoomNativeGesture:
-            # Always accrue: losing events starves the accumulator
             self._pinch_accum += event.value()
             self._pinch_smooth = self._pinch_smooth * 0.70 + self._pinch_accum * 0.30
-
-            # Throttle rendering only — zoom state is always up to date
-            if now - self._last_rebuild_ms < _REBUILD_INTERVAL_MS:
-                return
-
             v = self._pinch_smooth * PINCH_SENSITIVITY
             scale = math.pow(2.0, v)
             new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
