@@ -2,8 +2,7 @@ import os
 import math
 import fitz
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
-                             QPushButton, QLabel, QStackedWidget,
-                             QApplication)
+                             QPushButton, QLabel, QStackedWidget)
 from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal, QEvent, QDateTime
 from PyQt5.QtGui import (QPixmap, QImage, QPainter, QMouseEvent,
                          QWheelEvent, QCursor, QNativeGestureEvent)
@@ -35,18 +34,23 @@ class ScoreCanvas(QWidget):
         self._pinch_base_zoom = MIN_ZOOM  # zoom level at pinch start
         self._pinch_active = False
         self._last_rebuild_ms = 0
+        self._last_gesture_ms = 0
         self.setMouseTracking(True)
         self.setCursor(Qt.OpenHandCursor)
         self.setStyleSheet('background-color: #e0e0e0; border: none;')
         self.setMinimumSize(200, 200)
-        # Required on macOS for native touch events → Qt gestures
         self.setAttribute(Qt.WA_AcceptTouchEvents, True)
         self.grabGesture(Qt.PinchGesture)
 
     def event(self, event):
+        # Route NativeGesture through PdfViewerPanel to avoid duplicates
         if event.type() == QEvent.NativeGesture:
-            self._handle_native_gesture(event)
-            return True
+            p = self.parent()
+            while p and not isinstance(p, PdfViewerPanel):
+                p = p.parent()
+            if p:
+                p.event(event)
+                return True
         if event.type() == QEvent.Gesture:
             for gesture in event.gestures():
                 if isinstance(gesture, QPinchGesture):
@@ -55,14 +59,13 @@ class ScoreCanvas(QWidget):
         return super().event(event)
 
     def _handle_native_gesture(self, event, anchor_pos=None):
-        """Handle macOS trackpad pinch-to-zoom via NativeGesture.
-
-        Accumulates per-event magnification deltas → EMA-smooth →
-        exponential zoom.  Accumulation means zoom grows naturally
-        with the gesture and the EMA filters frame-to-frame noise.
-        """
         if not self._full_pixmap:
             return
+        # Dedup: macOS may deliver same gesture to multiple NSViews
+        now = QDateTime.currentMSecsSinceEpoch()
+        if now - self._last_gesture_ms < 2:
+            return
+        self._last_gesture_ms = now
         gt = event.gestureType()
         if gt == Qt.BeginNativeGesture:
             if anchor_pos is None:
@@ -75,7 +78,6 @@ class ScoreCanvas(QWidget):
             self._pinch_active = True
         elif gt == Qt.ZoomNativeGesture:
             self._pinch_accum += event.value()
-            # Light EMA on accumulated total → dampens noise
             self._pinch_smooth = self._pinch_smooth * 0.70 + self._pinch_accum * 0.30
             v = self._pinch_smooth * PINCH_SENSITIVITY
             scale = math.pow(2.0, v)
@@ -299,6 +301,7 @@ class DualScoreCanvas(QWidget):
         self._pinch_active = False
         self._single_page = True
         self._last_rebuild_ms = 0
+        self._last_gesture_ms = 0
         self.setMouseTracking(True)
         self.setCursor(Qt.OpenHandCursor)
         self.setStyleSheet('background-color: #e0e0e0; border: none;')
@@ -308,9 +311,16 @@ class DualScoreCanvas(QWidget):
         self.grabGesture(Qt.PinchGesture)
 
     def event(self, event):
+        # Forward NativeGesture through the panel to guarantee single-call.
+        # (On macOS the event may arrive at this canvas NSView directly,
+        # bypassing PdfViewerPanel.event().)
         if event.type() == QEvent.NativeGesture:
-            self._handle_native_gesture(event)
-            return True
+            p = self.parent()
+            while p and not isinstance(p, PdfViewerPanel):
+                p = p.parent()
+            if p:
+                p.event(event)
+                return True
         if event.type() == QEvent.Gesture:
             for gesture in event.gestures():
                 if isinstance(gesture, QPinchGesture):
@@ -319,12 +329,12 @@ class DualScoreCanvas(QWidget):
         return super().event(event)
 
     def _handle_native_gesture(self, event, anchor_pos=None):
-        """Handle macOS trackpad pinch-to-zoom via NativeGesture.
-
-        Accumulates per-event deltas → EMA → exponential zoom.
-        """
         if not self._full_left:
             return
+        now = QDateTime.currentMSecsSinceEpoch()
+        if now - self._last_gesture_ms < 2:
+            return
+        self._last_gesture_ms = now
         gt = event.gestureType()
         if gt == Qt.BeginNativeGesture:
             if anchor_pos is None:
@@ -588,37 +598,12 @@ class PdfViewerPanel(QWidget):
         self._init_ui()
 
     def event(self, event):
-        """Forward NativeGesture to the active canvas.
-
-        NativeGesture events on macOS may not reliably propagate to
-        child widgets nested inside QStackedWidget.  Handling them
-        at the panel level guarantees delivery.  We also remap the
-        event position into canvas coordinates so the zoom anchor
-        point is correct.
-        """
+        """Forward NativeGesture to active canvas — THE single entry point."""
         if event.type() == QEvent.NativeGesture:
             canvas_pos = self.canvas.mapFrom(self, QPointF(event.pos()))
             self.canvas._handle_native_gesture(event, canvas_pos)
             return True
         return super().event(event)
-
-    def _install_gesture_filter(self):
-        """Install event filter on *self* — captures NativeGesture for
-        this panel and all its descendants (both canvases, nav buttons,
-        the stacked widget, etc.) without affecting the rest of the app."""
-        self.installEventFilter(self)
-
-    def eventFilter(self, obj, event):
-        if event.type() == QEvent.NativeGesture:
-            # Map event position from whichever child received it
-            # into the active canvas's coordinate space
-            if obj is self:
-                canvas_pos = QPointF(event.pos())
-            else:
-                canvas_pos = self.canvas.mapFrom(obj, QPointF(event.pos()))
-            self.canvas._handle_native_gesture(event, canvas_pos)
-            return True
-        return super().eventFilter(obj, event)
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
@@ -654,9 +639,6 @@ class PdfViewerPanel(QWidget):
         nav_layout.addWidget(self.toggle_btn)
         nav_layout.addStretch()
         layout.addLayout(nav_layout)
-
-        # Catch NativeGesture events at the application level as fallback
-        self._install_gesture_filter()
 
     def display_song(self, song_id):
         import app.database as db
