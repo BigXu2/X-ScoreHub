@@ -36,16 +36,10 @@ class MainWindow(QMainWindow):
     def eventFilter(self, obj, event):
         if event.type() == QEvent.NativeGesture:
             canvas = self.pdf_viewer.canvas
-            # Map from the receiver to canvas — obj may be a QWindow
-            # (not a QWidget), so guard with isinstance.
-            try:
-                pos = event.posF() if hasattr(event, 'posF') else QPointF(event.pos())
-                if isinstance(obj, QWidget) and obj is not canvas:
-                    canvas_pos = canvas.mapFrom(obj, pos)
-                else:
-                    canvas_pos = pos
-            except (TypeError, AttributeError):
-                canvas_pos = QPointF(event.pos())
+            # globalPos() is in screen coords — always correct,
+            # regardless of which NSView received the event.
+            gp = event.globalPos()
+            canvas_pos = QPointF(canvas.mapFromGlobal(gp.toPoint()))
             canvas._handle_native_gesture(event, canvas_pos)
             return True
         return super().eventFilter(obj, event)
