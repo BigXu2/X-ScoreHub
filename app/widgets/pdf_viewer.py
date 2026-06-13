@@ -189,6 +189,10 @@ class ScoreCanvas(QWidget):
         return QPointF(widget_pos.x() - cx, widget_pos.y() - cy)
 
     def wheelEvent(self, event: QWheelEvent):
+        # Ignore wheel while pinch is active — macOS sends both
+        # NativeGesture and Wheel events during trackpad pinch.
+        if self._pinch_active:
+            return
         if not self._full_pixmap:
             return
         pos = event.posF() if hasattr(event, 'posF') else QPointF(event.pos())
@@ -515,6 +519,8 @@ class DualScoreCanvas(QWidget):
     # ── zoom / pan ───────────────────────────────────────────────────
 
     def wheelEvent(self, event: QWheelEvent):
+        if self._pinch_active:
+            return
         if not self._full_left:
             return
         pos = event.posF() if hasattr(event, 'posF') else QPointF(event.pos())
