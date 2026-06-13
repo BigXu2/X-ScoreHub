@@ -39,7 +39,7 @@ class MainWindow(QMainWindow):
             # globalPos() is in screen coords — always correct,
             # regardless of which NSView received the event.
             gp = event.globalPos()
-            canvas_pos = QPointF(canvas.mapFromGlobal(gp.toPoint()))
+            canvas_pos = QPointF(canvas.mapFromGlobal(gp))
             canvas._handle_native_gesture(event, canvas_pos)
             return True
         return super().eventFilter(obj, event)
