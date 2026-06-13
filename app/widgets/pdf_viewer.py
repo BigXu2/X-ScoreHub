@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QStackedWidget)
 from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal, QEvent
 from PyQt5.QtGui import (QPixmap, QImage, QPainter, QMouseEvent,
-                         QWheelEvent, QCursor)
+                         QWheelEvent, QCursor, QNativeGestureEvent)
 from PyQt5.QtWidgets import QGestureEvent, QPinchGesture
 
 PDF_REPO = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
@@ -34,9 +34,14 @@ class ScoreCanvas(QWidget):
         self.setCursor(Qt.OpenHandCursor)
         self.setStyleSheet('background-color: #e0e0e0; border: none;')
         self.setMinimumSize(200, 200)
+        # Required on macOS for native touch events → Qt gestures
+        self.setAttribute(Qt.WA_AcceptTouchEvents, True)
         self.grabGesture(Qt.PinchGesture)
 
     def event(self, event):
+        if event.type() == QEvent.NativeGesture:
+            self._handle_native_gesture(event)
+            return True
         if event.type() == QEvent.Gesture:
             for gesture in event.gestures():
                 if isinstance(gesture, QPinchGesture):
@@ -44,8 +49,18 @@ class ScoreCanvas(QWidget):
             return True
         return super().event(event)
 
+    def _handle_native_gesture(self, event: QNativeGestureEvent):
+        """Handle macOS trackpad pinch-to-zoom via NativeGesture."""
+        if not self._full_pixmap:
+            return
+        if event.gestureType() == Qt.ZoomNativeGesture:
+            # value() is the magnification delta since last event
+            delta = event.value()
+            new_zoom = max(MIN_ZOOM, min(MAX_ZOOM, self._zoom * (1.0 + delta)))
+            self._apply_zoom_at_point(new_zoom, QPointF(event.pos()))
+
     def _handle_pinch(self, gesture):
-        """Apply pinch-to-zoom from a QPinchGesture."""
+        """Apply pinch-to-zoom from a QPinchGesture (touchscreen / cross-platform fallback)."""
         if not self._full_pixmap:
             return
         if gesture.state() == Qt.GestureStarted:
@@ -235,9 +250,14 @@ class DualScoreCanvas(QWidget):
         self.setCursor(Qt.OpenHandCursor)
         self.setStyleSheet('background-color: #e0e0e0; border: none;')
         self.setMinimumSize(200, 200)
+        # Required on macOS for native touch events → Qt gestures
+        self.setAttribute(Qt.WA_AcceptTouchEvents, True)
         self.grabGesture(Qt.PinchGesture)
 
     def event(self, event):
+        if event.type() == QEvent.NativeGesture:
+            self._handle_native_gesture(event)
+            return True
         if event.type() == QEvent.Gesture:
             for gesture in event.gestures():
                 if isinstance(gesture, QPinchGesture):
@@ -245,8 +265,17 @@ class DualScoreCanvas(QWidget):
             return True
         return super().event(event)
 
+    def _handle_native_gesture(self, event: QNativeGestureEvent):
+        """Handle macOS trackpad pinch-to-zoom via NativeGesture."""
+        if not self._full_left:
+            return
+        if event.gestureType() == Qt.ZoomNativeGesture:
+            delta = event.value()
+            new_zoom = max(MIN_ZOOM, min(MAX_ZOOM, self._zoom * (1.0 + delta)))
+            self._apply_zoom_at_point(new_zoom, QPointF(event.pos()))
+
     def _handle_pinch(self, gesture):
-        """Apply pinch-to-zoom from a QPinchGesture."""
+        """Apply pinch-to-zoom from a QPinchGesture (touchscreen fallback)."""
         if not self._full_left:
             return
         if gesture.state() == Qt.GestureStarted:
