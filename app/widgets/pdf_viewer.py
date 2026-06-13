@@ -4,7 +4,7 @@ import fitz
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QStackedWidget,
                              QApplication)
-from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal, QEvent
+from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal, QEvent, QDateTime
 from PyQt5.QtGui import (QPixmap, QImage, QPainter, QMouseEvent,
                          QWheelEvent, QCursor, QNativeGestureEvent)
 from PyQt5.QtWidgets import QGestureEvent, QPinchGesture
@@ -17,6 +17,7 @@ MIN_ZOOM = 1.0
 MAX_ZOOM = 8.0
 ZOOM_STEP = 0.12
 PINCH_SENSITIVITY = 12.0   # amplify macOS cumulative magnification → zoom factor
+_REBUILD_INTERVAL_MS = 33  # throttle display rebuilds during pinch (~30 fps)
 
 
 class ScoreCanvas(QWidget):
@@ -33,6 +34,7 @@ class ScoreCanvas(QWidget):
         self._offset_start = QPointF(0, 0)
         self._pinch_base_zoom = MIN_ZOOM  # zoom level at pinch start
         self._pinch_active = False
+        self._last_rebuild_ms = 0
         self.setMouseTracking(True)
         self.setCursor(Qt.OpenHandCursor)
         self.setStyleSheet('background-color: #e0e0e0; border: none;')
@@ -53,33 +55,28 @@ class ScoreCanvas(QWidget):
         return super().event(event)
 
     def _handle_native_gesture(self, event: QNativeGestureEvent):
-        """Handle macOS trackpad pinch-to-zoom via NativeGesture.
-
-        On macOS, value() is the CUMULATIVE magnification since the
-        gesture began (starts at 0, peaks, then retreats toward 0
-        when fingers lift).  It is NOT a per-event delta, so we must
-        NOT accumulate it.  Peak tracking keeps zoom at the extreme
-        and ignores the retreat phase.
-        """
+        """Handle macOS trackpad pinch-to-zoom via NativeGesture."""
         if not self._full_pixmap:
             return
         gt = event.gestureType()
         if gt == Qt.BeginNativeGesture:
             self._pinch_peak = 0.0
             self._pinch_base_zoom = self._zoom
+            self._pinch_active = True          # enable throttle + fast scaling
         elif gt == Qt.ZoomNativeGesture:
-            # value() is already cumulative → use directly, amplify
             v = event.value() * PINCH_SENSITIVITY
             if abs(v) <= abs(self._pinch_peak):
-                return  # retreat phase — ignore
+                return
             self._pinch_peak = v
-            # scale = 2^v  →  symmetric zoom-in / zoom-out
-            # 2^0 = 1 (no change), 2^0.7 ≈ 1.6x, 2^-0.7 ≈ 0.6x
             scale = math.pow(2.0, v)
             new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
                            self._pinch_base_zoom * scale))
             self._apply_zoom_at_point(new_zoom, QPointF(event.pos()))
         elif gt == Qt.EndNativeGesture:
+            self._pinch_active = False         # gesture ended
+            # Force one final smooth (high-quality) render
+            self._rebuild_display(force=True)
+            self.update()
             if self._zoom <= MIN_ZOOM + 0.001:
                 self._offset = QPointF(0, 0)
 
@@ -97,6 +94,8 @@ class ScoreCanvas(QWidget):
             self._apply_zoom_at_point(new_zoom, QPointF(center.x(), center.y()))
         elif gesture.state() in (Qt.GestureFinished, Qt.GestureCanceled):
             self._pinch_active = False
+            self._rebuild_display(force=True)
+            self.update()
             if self._zoom <= MIN_ZOOM + 0.001:
                 self._offset = QPointF(0, 0)
 
@@ -140,19 +139,37 @@ class ScoreCanvas(QWidget):
         scale = min(ww / pw, wh / ph)
         return int(pw * scale), int(ph * scale)
 
-    def _rebuild_display(self):
-        """Rebuild _display_pixmap at current zoom level."""
+    def _rebuild_display(self, force=False):
+        """Rebuild _display_pixmap at current zoom level.
+
+        During an active pinch gesture, the method is throttled to
+        avoid stuttering from expensive 200 DPI SmoothTransformation,
+        and uses FastTransformation for speed.  A final high-quality
+        rebuild is forced when the gesture ends (force=True).
+        """
         if not self._full_pixmap:
             self._display_pixmap = None
             return
+
+        # ── throttle during active pinch ──
+        now = QDateTime.currentMSecsSinceEpoch()
+        if self._pinch_active and not force:
+            if now - self._last_rebuild_ms < _REBUILD_INTERVAL_MS:
+                return
+
         bw, bh = self._base_size()
         tw = int(bw * self._zoom)
         th = int(bh * self._zoom)
         if tw < 1 or th < 1:
             self._display_pixmap = None
             return
+
+        # Fast (bilinear) during pinch, smooth (bicubic) otherwise
+        mode = Qt.FastTransformation if (self._pinch_active and not force) \
+               else Qt.SmoothTransformation
         self._display_pixmap = self._full_pixmap.scaled(
-            tw, th, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            tw, th, Qt.KeepAspectRatio, mode)
+        self._last_rebuild_ms = now
 
     def _image_pos_at(self, widget_pos):
         """Convert widget coordinate to image coordinate (zoom=1.0 space)."""
@@ -270,6 +287,7 @@ class DualScoreCanvas(QWidget):
         self._pinch_base_zoom = MIN_ZOOM
         self._pinch_active = False
         self._single_page = True
+        self._last_rebuild_ms = 0
         self.setMouseTracking(True)
         self.setCursor(Qt.OpenHandCursor)
         self.setStyleSheet('background-color: #e0e0e0; border: none;')
@@ -290,20 +308,14 @@ class DualScoreCanvas(QWidget):
         return super().event(event)
 
     def _handle_native_gesture(self, event: QNativeGestureEvent):
-        """Handle macOS trackpad pinch-to-zoom via NativeGesture.
-
-        On macOS, value() is the CUMULATIVE magnification since the
-        gesture began (starts at 0, peaks, then retreats toward 0
-        when fingers lift).  It is NOT a per-event delta, so we must
-        NOT accumulate it.  Peak tracking keeps zoom at the extreme
-        and ignores the retreat phase.
-        """
+        """Handle macOS trackpad pinch-to-zoom via NativeGesture."""
         if not self._full_left:
             return
         gt = event.gestureType()
         if gt == Qt.BeginNativeGesture:
             self._pinch_peak = 0.0
             self._pinch_base_zoom = self._zoom
+            self._pinch_active = True
         elif gt == Qt.ZoomNativeGesture:
             v = event.value() * PINCH_SENSITIVITY
             if abs(v) <= abs(self._pinch_peak):
@@ -314,6 +326,9 @@ class DualScoreCanvas(QWidget):
                            self._pinch_base_zoom * scale))
             self._apply_zoom_at_point(new_zoom, QPointF(event.pos()))
         elif gt == Qt.EndNativeGesture:
+            self._pinch_active = False
+            self._rebuild_display(force=True)
+            self.update()
             if self._zoom <= MIN_ZOOM + 0.001:
                 self._offset = QPointF(0, 0)
 
@@ -331,6 +346,8 @@ class DualScoreCanvas(QWidget):
             self._apply_zoom_at_point(new_zoom, QPointF(center.x(), center.y()))
         elif gesture.state() in (Qt.GestureFinished, Qt.GestureCanceled):
             self._pinch_active = False
+            self._rebuild_display(force=True)
+            self.update()
             if self._zoom <= MIN_ZOOM + 0.001:
                 self._offset = QPointF(0, 0)
 
@@ -399,12 +416,21 @@ class DualScoreCanvas(QWidget):
 
         return int(pw * scale), int(ph * scale)
 
-    def _rebuild_display(self):
-        """Rebuild display pixmaps at current zoom level."""
+    def _rebuild_display(self, force=False):
+        """Rebuild display pixmaps at current zoom level.
+
+        During pinch: throttled (max ~33 fps) + FastTransformation.
+        Gesture end (force=True): final SmoothTransformation render.
+        """
         if not self._full_left:
             self._display_left = None
             self._display_right = None
             return
+
+        now = QDateTime.currentMSecsSinceEpoch()
+        if self._pinch_active and not force:
+            if now - self._last_rebuild_ms < _REBUILD_INTERVAL_MS:
+                return
 
         bw, bh = self._base_size()
         zoom = self._zoom
@@ -415,20 +441,24 @@ class DualScoreCanvas(QWidget):
             self._display_right = None
             return
 
+        mode = Qt.FastTransformation if (self._pinch_active and not force) \
+               else Qt.SmoothTransformation
+
         self._display_left = self._full_left.scaled(
-            tw, th, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            tw, th, Qt.KeepAspectRatio, mode)
 
         if self._full_right and not self._single_page:
-            # Use the same scale factor derived from the left page
             scale = zoom * (bw / self._full_left.width())
             tw_r = int(self._full_right.width() * scale)
             th_r = int(self._full_right.height() * scale)
             self._display_right = self._full_right.scaled(
-                tw_r, th_r, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                tw_r, th_r, Qt.KeepAspectRatio, mode)
             self._display_gap = int(self.GAP * scale)
         else:
             self._display_right = None
             self._display_gap = 0
+
+        self._last_rebuild_ms = now
 
     def _total_display_size(self):
         """Return (width, height) of the rendered spread in display pixels."""
@@ -542,11 +572,9 @@ class PdfViewerPanel(QWidget):
     def event(self, event):
         """Forward NativeGesture to the active canvas.
 
-        On macOS, NativeGesture events are delivered to the NSView
-        at the touch location.  When the canvas is nested inside a
-        QStackedWidget, the stacked widget's own NSView may claim
-        the events, preventing them from reaching the child canvas.
-        Handling them at the panel level guarantees delivery.
+        NativeGesture events on macOS may not reliably propagate to
+        child widgets nested inside QStackedWidget.  Handling them
+        at the panel level guarantees delivery.
         """
         if event.type() == QEvent.NativeGesture:
             self.canvas._handle_native_gesture(event)
@@ -554,12 +582,7 @@ class PdfViewerPanel(QWidget):
         return super().event(event)
 
     def _install_gesture_filter(self):
-        """Install an application-wide event filter for NativeGesture.
-
-        This is a belt-and-suspenders measure: if the panel-level
-        event() handler misses the event (e.g. focus is on a sibling
-        widget), the filter catches it at the QApplication level.
-        """
+        """Install application-wide event filter as a fallback catch."""
         app = QApplication.instance()
         if app is not None:
             app.installEventFilter(self)
