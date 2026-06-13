@@ -1,0 +1,22 @@
+# Python virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# IDE
+.vscode/
+.idea/
+
+# PDF repository — large binary files (~4.6GB), static source material
+# Not tracked in git; must be present on disk for the app to function
+pdf_repo/
+
+# OCR intermediate results (large JSON)
+ocr_results.json
