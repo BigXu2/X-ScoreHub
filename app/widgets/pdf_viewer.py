@@ -16,7 +16,7 @@ RENDER_DPI = 200
 MIN_ZOOM = 1.0
 MAX_ZOOM = 8.0
 ZOOM_STEP = 0.12
-PINCH_SENSITIVITY = 12.0   # amplify macOS cumulative magnification → zoom factor
+PINCH_SENSITIVITY = 28.0   # amplify macOS cumulative magnification → zoom factor
 _REBUILD_INTERVAL_MS = 33  # throttle display rebuilds during pinch (~30 fps)
 
 
@@ -57,9 +57,10 @@ class ScoreCanvas(QWidget):
     def _handle_native_gesture(self, event, anchor_pos=None):
         """Handle macOS trackpad pinch-to-zoom via NativeGesture.
 
-        The anchor point is captured once at GestureStart and reused
-        throughout, keeping the zoom center rock-steady — just like
-        wheel-zoom stays fixed on the cursor position.
+        Uses the live magnification value directly (no peak tracking).
+        At high sensitivity the value range is wide enough that the
+        natural release-phase return to 0 becomes a smooth spring-back
+        rather than a jarring snap.
         """
         if not self._full_pixmap:
             return
@@ -69,14 +70,10 @@ class ScoreCanvas(QWidget):
                 anchor_pos = (event.posF() if hasattr(event, 'posF')
                               else QPointF(event.pos()))
             self._pinch_anchor = anchor_pos
-            self._pinch_peak = 0.0
             self._pinch_base_zoom = self._zoom
             self._pinch_active = True
         elif gt == Qt.ZoomNativeGesture:
             v = event.value() * PINCH_SENSITIVITY
-            if abs(v) <= abs(self._pinch_peak):
-                return
-            self._pinch_peak = v
             scale = math.pow(2.0, v)
             new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
                            self._pinch_base_zoom * scale))
@@ -85,8 +82,6 @@ class ScoreCanvas(QWidget):
             self._pinch_active = False
             self._rebuild_display(force=True)
             self.update()
-            if self._zoom <= MIN_ZOOM + 0.001:
-                self._offset = QPointF(0, 0)
 
     def _handle_pinch(self, gesture):
         """Apply pinch-to-zoom from a QPinchGesture (touchscreen / cross-platform fallback)."""
@@ -318,8 +313,7 @@ class DualScoreCanvas(QWidget):
     def _handle_native_gesture(self, event, anchor_pos=None):
         """Handle macOS trackpad pinch-to-zoom via NativeGesture.
 
-        The anchor point is captured once at GestureStart and reused
-        throughout, keeping the zoom center rock-steady.
+        Uses the live magnification value directly (no peak tracking).
         """
         if not self._full_left:
             return
@@ -329,14 +323,10 @@ class DualScoreCanvas(QWidget):
                 anchor_pos = (event.posF() if hasattr(event, 'posF')
                               else QPointF(event.pos()))
             self._pinch_anchor = anchor_pos
-            self._pinch_peak = 0.0
             self._pinch_base_zoom = self._zoom
             self._pinch_active = True
         elif gt == Qt.ZoomNativeGesture:
             v = event.value() * PINCH_SENSITIVITY
-            if abs(v) <= abs(self._pinch_peak):
-                return
-            self._pinch_peak = v
             scale = math.pow(2.0, v)
             new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
                            self._pinch_base_zoom * scale))
@@ -345,8 +335,6 @@ class DualScoreCanvas(QWidget):
             self._pinch_active = False
             self._rebuild_display(force=True)
             self.update()
-            if self._zoom <= MIN_ZOOM + 0.001:
-                self._offset = QPointF(0, 0)
 
     def _handle_pinch(self, gesture):
         """Apply pinch-to-zoom from a QPinchGesture (touchscreen fallback)."""
@@ -601,14 +589,19 @@ class PdfViewerPanel(QWidget):
         return super().event(event)
 
     def _install_gesture_filter(self):
-        """Install application-wide event filter as a fallback catch."""
-        app = QApplication.instance()
-        if app is not None:
-            app.installEventFilter(self)
+        """Install event filter on *self* — captures NativeGesture for
+        this panel and all its descendants (both canvases, nav buttons,
+        the stacked widget, etc.) without affecting the rest of the app."""
+        self.installEventFilter(self)
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.NativeGesture:
-            canvas_pos = self.canvas.mapFromGlobal(event.globalPos())
+            # Map event position from whichever child received it
+            # into the active canvas's coordinate space
+            if obj is self:
+                canvas_pos = QPointF(event.pos())
+            else:
+                canvas_pos = self.canvas.mapFrom(obj, QPointF(event.pos()))
             self.canvas._handle_native_gesture(event, canvas_pos)
             return True
         return super().eventFilter(obj, event)
