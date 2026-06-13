@@ -83,6 +83,11 @@ class ScoreCanvas(QWidget):
             self._pinch_active = False
             self._rebuild_display(force=True)
             self.update()
+            if self._zoom <= MIN_ZOOM + 0.001:
+                self._zoom = MIN_ZOOM
+                self._offset = QPointF(0, 0)
+                self._rebuild_display(force=True)
+                self.update()
 
     def _handle_pinch(self, gesture):
         """Apply pinch-to-zoom from a QPinchGesture (touchscreen / cross-platform fallback)."""
@@ -349,6 +354,11 @@ class DualScoreCanvas(QWidget):
             self._pinch_active = False
             self._rebuild_display(force=True)
             self.update()
+            if self._zoom <= MIN_ZOOM + 0.001:
+                self._zoom = MIN_ZOOM
+                self._offset = QPointF(0, 0)
+                self._rebuild_display(force=True)
+                self.update()
 
     def _handle_pinch(self, gesture):
         """Apply pinch-to-zoom from a QPinchGesture (touchscreen fallback)."""
