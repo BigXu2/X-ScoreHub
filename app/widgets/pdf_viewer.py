@@ -53,6 +53,13 @@ class ScoreCanvas(QWidget):
     def _handle_native_gesture(self, event, anchor_pos=None):
         if not self._full_pixmap:
             return
+        # macOS delivers each NativeGesture to 3 different NSViews,
+        # triggering the QApp filter 3× per gesture frame.  Dedup by
+        # time — identical frames arrive within 1 ms of each other.
+        now = QDateTime.currentMSecsSinceEpoch()
+        if now - self._last_gesture_ms <= 1:
+            return
+        self._last_gesture_ms = now
         gt = event.gestureType()
         if gt == Qt.BeginNativeGesture:
             if anchor_pos is None:
@@ -315,6 +322,10 @@ class DualScoreCanvas(QWidget):
     def _handle_native_gesture(self, event, anchor_pos=None):
         if not self._full_left:
             return
+        now = QDateTime.currentMSecsSinceEpoch()
+        if now - self._last_gesture_ms <= 1:
+            return
+        self._last_gesture_ms = now
         gt = event.gestureType()
         if gt == Qt.BeginNativeGesture:
             if anchor_pos is None:

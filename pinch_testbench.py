@@ -1,8 +1,7 @@
 """Pinch gesture diagnostic testbench.
 
 Records raw NativeGesture events to a JSON file for offline analysis.
-Each gesture (Begin→End) is saved as a separate record with all
-ZoomNativeGesture events in between.
+Uses QApplication eventFilter for reliable macOS event capture.
 
 Usage:
   python pinch_testbench.py          # record gestures
@@ -14,7 +13,7 @@ from datetime import datetime
 
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QTextEdit)
-from PyQt5.QtCore import Qt, QEvent, QTimer
+from PyQt5.QtCore import Qt, QEvent, QTimer, QPointF
 from PyQt5.QtGui import QNativeGestureEvent
 
 RECORD_FILE = '/tmp/pinch_record.json'
@@ -25,24 +24,20 @@ class Testbench(QWidget):
         super().__init__()
         self.setWindowTitle('Pinch Testbench — 双指缩放诊断')
         self.resize(800, 600)
-        self.setAttribute(Qt.WA_AcceptTouchEvents, True)
         self.setStyleSheet('background-color: #1a1a2e;')
 
         layout = QVBoxLayout(self)
 
-        # Status
-        self.status = QLabel('在该窗口内使用触控板做放大/缩小手势\n'
-                            '按「保存并分析」查看数据')
+        self.status = QLabel('在该窗口或主应用窗口内使用触控板做手势\n'
+                            '全局捕获模式——不限于本窗口')
         self.status.setStyleSheet('color: #aaa; font-size: 15px; padding: 10px;')
         layout.addWidget(self.status)
 
-        # Live log
         self.log = QTextEdit()
         self.log.setReadOnly(True)
         self.log.setStyleSheet('color: #0f0; background: #000; font: 13px monospace;')
         layout.addWidget(self.log, 1)
 
-        # Buttons
         btn_row = QHBoxLayout()
         self.save_btn = QPushButton('停止录制并分析')
         self.save_btn.setStyleSheet('color: #fff; background: #2196F3; padding: 10px 20px; font-size: 15px;')
@@ -59,11 +54,14 @@ class Testbench(QWidget):
         self._current = None
         self._event_seq = 0
 
-    def event(self, event):
+        # ── USe QApplication eventFilter — same as main app ──
+        QApplication.instance().installEventFilter(self)
+
+    def eventFilter(self, obj, event):
         if event.type() == QEvent.NativeGesture:
             self._record(event)
-            return True
-        return super().event(event)
+            return False  # don't consume — let other filters also process
+        return super().eventFilter(obj, event)
 
     def _record(self, event):
         gt = event.gestureType()
@@ -106,30 +104,15 @@ class Testbench(QWidget):
             if not zooms:
                 continue
             values = [e['value'] for e in zooms]
-
-            v_min = min(values)
-            v_max = max(values)
+            v_min, v_max = min(values), max(values)
             peak = v_max if abs(v_max) >= abs(v_min) else v_min
-            abs_peaks = [max(abs(v_min), abs(v_max)) for _ in [1]]
             n = len(values)
-
-            # Detect direction reversals
-            reversals = 0
-            last_sign = None
-            for v in values:
-                s = 1 if v > 0 else -1
-                if last_sign is not None and s != last_sign:
-                    reversals += 1
-                last_sign = s
 
             self._log(f'\n手势 {i+1}: {n} 个事件', '#ff0')
             self._log(f'  方向: {"放大" if peak > 0 else "缩小"}')
             self._log(f'  value 范围: {v_min:.6f} → {v_max:.6f}')
             self._log(f'  峰值 |v|: {abs(peak):.6f}')
-            self._log(f'  方向反转次数: {reversals}')
-            self._log(f'  等效缩放 (灵敏度40x): 2^{peak*40:.2f} = {2**(peak*40):.2f}x')
-            self._log(f'  前半段 (0-50%): 峰值 |v|={max(abs(v) for v in values[:n//2]):.6f}')
-            self._log(f'  后半段 (50-100%): 峰值 |v|={max(abs(v) for v in values[n//2:]):.6f}')
+            self._log(f'  等效缩放 (灵敏度3x): 2^({peak*3:.2f}) = {2**(peak*3):.2f}x')
             self._log(f'  value 序列:')
             self._log(f'    {", ".join(f"{v:+.4f}" for v in values)}')
 
@@ -137,9 +120,10 @@ class Testbench(QWidget):
         if self._gestures:
             zooms_all = [e['value'] for g in self._gestures
                         for e in g['events'] if e['type'] == 'Zoom']
-            abs_max = max(abs(v) for v in zooms_all)
-            self._log(f'原始 value 最大 |v| = {abs_max:.6f}')
-            self._log(f'要放大到 4x: PINCH_SENSITIVITY = {math.log(4.0, 2) / abs_max:.0f} (min)')
+            if zooms_all:
+                abs_max = max(abs(v) for v in zooms_all)
+                self._log(f'原始 value 最大 |v| = {abs_max:.6f}')
+                self._log(f'累加后 scale = (accum / n_events * 0.3 * sensitivity)')
 
     def _clear(self):
         self._gestures = []
@@ -165,26 +149,23 @@ def replay_analysis():
 
         print(f'=== 手势 {i+1}: {len(values)} 事件 ===')
         print(f'  value 序列: {[f"{v:+.5f}" for v in values]}')
-        print(f'  范围: {min(values):+.5f} ~ {max(values):+.5f}')
 
         # Simulate our algorithm
-        print(f'\n  模拟算法: PINCH_SENSITIVITY=40, peak+EMA')
-        peak = 0.0
+        print(f'\n  模拟算法: PINCH_SENSITIVITY=3, accum+EMA')
+        accum = 0.0
         smooth = 0.0
         base_zoom = 1.0
         zooms = []
-        for v_raw_org in values:
-            v_raw = v_raw_org * 40.0
-            if abs(v_raw) > abs(peak):
-                peak = v_raw
-            smooth = smooth * 0.55 + peak * 0.45
-            scale = 2.0 ** smooth
+        for v_raw in values:
+            accum += v_raw
+            smooth = smooth * 0.70 + accum * 0.30
+            v = smooth * 3.0
+            scale = 2.0 ** v
             new_zoom = max(1.0, min(8.0, base_zoom * scale))
             zooms.append(new_zoom)
-            print(f'    raw={v_raw_org:+.5f} raw*40={v_raw:+.3f} peak={peak:+.3f} smooth={smooth:+.3f} zoom={new_zoom:.2f}x')
+            print(f'    raw={v_raw:+.5f} accum={accum:+.4f} smooth={smooth:+.4f} v={v:.4f} zoom={new_zoom:.2f}x')
 
-        print()
-        print(f'  zoom 变化: {[f"{z:.2f}" for z in zooms]}')
+        print(f'\n  zoom 变化: {[f"{z:.2f}" for z in zooms]}')
 
 
 if __name__ == '__main__':
