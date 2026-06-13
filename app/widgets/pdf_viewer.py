@@ -2,7 +2,8 @@ import os
 import math
 import fitz
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
-                             QPushButton, QLabel, QStackedWidget)
+                             QPushButton, QLabel, QStackedWidget,
+                             QApplication)
 from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal, QEvent
 from PyQt5.QtGui import (QPixmap, QImage, QPainter, QMouseEvent,
                          QWheelEvent, QCursor, QNativeGestureEvent)
@@ -15,7 +16,7 @@ RENDER_DPI = 200
 MIN_ZOOM = 1.0
 MAX_ZOOM = 8.0
 ZOOM_STEP = 0.12
-PINCH_SENSITIVITY = 6.0    # amplify macOS NSEvent.magnification cumulative values
+PINCH_SENSITIVITY = 12.0   # amplify macOS cumulative magnification → zoom factor
 
 
 class ScoreCanvas(QWidget):
@@ -536,20 +537,38 @@ class PdfViewerPanel(QWidget):
         self._current_song = None
         self._current_page_offset = 0
         self._fullscreen = False
-        self.setAttribute(Qt.WA_AcceptTouchEvents, True)
         self._init_ui()
 
     def event(self, event):
-        """Catch NativeGesture at the panel level and forward to active canvas.
+        """Forward NativeGesture to the active canvas.
 
-        On macOS, NativeGesture events may not propagate reliably to
-        child widgets nested inside QStackedWidget.  Handling them
-        here guarantees the active canvas always receives them.
+        On macOS, NativeGesture events are delivered to the NSView
+        at the touch location.  When the canvas is nested inside a
+        QStackedWidget, the stacked widget's own NSView may claim
+        the events, preventing them from reaching the child canvas.
+        Handling them at the panel level guarantees delivery.
         """
         if event.type() == QEvent.NativeGesture:
             self.canvas._handle_native_gesture(event)
             return True
         return super().event(event)
+
+    def _install_gesture_filter(self):
+        """Install an application-wide event filter for NativeGesture.
+
+        This is a belt-and-suspenders measure: if the panel-level
+        event() handler misses the event (e.g. focus is on a sibling
+        widget), the filter catches it at the QApplication level.
+        """
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.NativeGesture:
+            self.canvas._handle_native_gesture(event)
+            return True
+        return super().eventFilter(obj, event)
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
@@ -585,6 +604,9 @@ class PdfViewerPanel(QWidget):
         nav_layout.addWidget(self.toggle_btn)
         nav_layout.addStretch()
         layout.addLayout(nav_layout)
+
+        # Catch NativeGesture events at the application level as fallback
+        self._install_gesture_filter()
 
     def display_song(self, song_id):
         import app.database as db
