@@ -16,7 +16,7 @@ RENDER_DPI = 200
 MIN_ZOOM = 1.0
 MAX_ZOOM = 8.0
 ZOOM_STEP = 0.12
-PINCH_SENSITIVITY = 50.0   # amplify macOS cumulative magnification → zoom factor
+PINCH_SENSITIVITY = 1.5    # amplify accumulated deltas (accum reaches ~1-2)
 _REBUILD_INTERVAL_MS = 33  # throttle display rebuilds during pinch (~30 fps)
 
 
@@ -57,10 +57,9 @@ class ScoreCanvas(QWidget):
     def _handle_native_gesture(self, event, anchor_pos=None):
         """Handle macOS trackpad pinch-to-zoom via NativeGesture.
 
-        Testbench data shows value() oscillates rapidly around a trend.
-        Heavy EMA directly on (value * sensitivity) smooths the
-        oscillations while tracking the overall zoom direction.
-        No peak tracking, no accumulation — just smoothed live value.
+        Accumulates per-event magnification deltas → EMA-smooth →
+        exponential zoom.  Accumulation means zoom grows naturally
+        with the gesture and the EMA filters frame-to-frame noise.
         """
         if not self._full_pixmap:
             return
@@ -71,13 +70,14 @@ class ScoreCanvas(QWidget):
                               else QPointF(event.pos()))
             self._pinch_anchor = anchor_pos
             self._pinch_base_zoom = self._zoom
-            self._pinch_v_smooth = 0.0
+            self._pinch_accum = 0.0
+            self._pinch_smooth = 0.0
             self._pinch_active = True
         elif gt == Qt.ZoomNativeGesture:
-            v_raw = event.value() * PINCH_SENSITIVITY
-            # Heavy EMA: 80% old / 20% new — filters rapid oscillations
-            self._pinch_v_smooth = self._pinch_v_smooth * 0.80 + v_raw * 0.20
-            v = self._pinch_v_smooth
+            self._pinch_accum += event.value()
+            # Light EMA on accumulated total → dampens noise
+            self._pinch_smooth = self._pinch_smooth * 0.70 + self._pinch_accum * 0.30
+            v = self._pinch_smooth * PINCH_SENSITIVITY
             scale = math.pow(2.0, v)
             new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
                            self._pinch_base_zoom * scale))
@@ -317,7 +317,7 @@ class DualScoreCanvas(QWidget):
     def _handle_native_gesture(self, event, anchor_pos=None):
         """Handle macOS trackpad pinch-to-zoom via NativeGesture.
 
-        Heavy EMA directly on (value * sensitivity) — no peak, no accum.
+        Accumulates per-event deltas → EMA → exponential zoom.
         """
         if not self._full_left:
             return
@@ -328,12 +328,13 @@ class DualScoreCanvas(QWidget):
                               else QPointF(event.pos()))
             self._pinch_anchor = anchor_pos
             self._pinch_base_zoom = self._zoom
-            self._pinch_v_smooth = 0.0
+            self._pinch_accum = 0.0
+            self._pinch_smooth = 0.0
             self._pinch_active = True
         elif gt == Qt.ZoomNativeGesture:
-            v_raw = event.value() * PINCH_SENSITIVITY
-            self._pinch_v_smooth = self._pinch_v_smooth * 0.80 + v_raw * 0.20
-            v = self._pinch_v_smooth
+            self._pinch_accum += event.value()
+            self._pinch_smooth = self._pinch_smooth * 0.70 + self._pinch_accum * 0.30
+            v = self._pinch_smooth * PINCH_SENSITIVITY
             scale = math.pow(2.0, v)
             new_zoom = max(MIN_ZOOM, min(MAX_ZOOM,
                            self._pinch_base_zoom * scale))
