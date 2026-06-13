@@ -1,8 +1,9 @@
 import os
 from PyQt5.QtWidgets import (QMainWindow, QSplitter, QMenuBar, QAction,
                              QFileDialog, QMessageBox, QLineEdit, QTextEdit,
-                             QSpinBox, QAbstractSpinBox)
+                             QSpinBox, QAbstractSpinBox, QShortcut)
 from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QKeySequence
 from app.widgets.song_list import SongListPanel
 from app.widgets.pdf_viewer import PdfViewerPanel
 from app.widgets.song_info import SongInfoPanel
@@ -79,6 +80,11 @@ class MainWindow(QMainWindow):
         # Enforce initial splitter sizes after layout settles
         QTimer.singleShot(0, lambda: self.splitter.setSizes([340, 1000, 340]))
 
+        # Global shortcut: Ctrl+Cmd+F toggles fullscreen score display
+        self._fullscreen_shortcut = QShortcut(
+            QKeySequence(Qt.ControlModifier | Qt.MetaModifier | Qt.Key_F), self)
+        self._fullscreen_shortcut.activated.connect(self._toggle_fullscreen)
+
     def _on_song_selected(self, song_id):
         self.pdf_viewer.display_song(song_id)
         self.song_info.display_song(song_id)
@@ -151,6 +157,29 @@ class MainWindow(QMainWindow):
                     self, '导出成功', f'已导出 {len(ids)} 首曲目到:\n{filepath}')
             except Exception as e:
                 QMessageBox.warning(self, '导出失败', str(e))
+
+    def _toggle_fullscreen(self):
+        """Toggle between normal three-panel layout and fullscreen score view.
+
+        In fullscreen mode the song list and info panels are hidden,
+        and the PDF viewer shows two pages side-by-side.
+        """
+        is_fullscreen = self.pdf_viewer._fullscreen
+        if not is_fullscreen:
+            # ── enter fullscreen ────────────────────────────────
+            self.song_list.hide()
+            self.song_info.hide()
+            # Hide splitter handles between the 3 panels
+            for i in range(1, self.splitter.count()):
+                self.splitter.handle(i).hide()
+            self.pdf_viewer.set_fullscreen(True)
+        else:
+            # ── exit fullscreen ─────────────────────────────────
+            self.pdf_viewer.set_fullscreen(False)
+            self.song_list.show()
+            self.song_info.show()
+            for i in range(1, self.splitter.count()):
+                self.splitter.handle(i).show()
 
     def keyPressEvent(self, event):
         key = event.key()

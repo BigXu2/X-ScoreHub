@@ -1,7 +1,7 @@
 import os
 import fitz
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
-                             QPushButton, QLabel)
+                             QPushButton, QLabel, QStackedWidget)
 from PyQt5.QtCore import Qt, QPointF, QRectF
 from PyQt5.QtGui import (QPixmap, QImage, QPainter, QMouseEvent,
                          QWheelEvent, QCursor)
@@ -176,20 +176,248 @@ class ScoreCanvas(QWidget):
         painter.end()
 
 
+class DualScoreCanvas(QWidget):
+    """Zoomable, pannable dual-page score display.
+
+    Displays two pages side-by-side with a gap. Zoom and pan are
+    synchronized — both pages scale together and move as one unit.
+    Falls back to centered single-page display when only one page
+    is provided.
+    """
+
+    GAP = 40  # gap in full-resolution equivalent pixels (~0.2 inch @200DPI)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._full_left = None
+        self._full_right = None
+        self._display_left = None
+        self._display_right = None
+        self._display_gap = 0
+        self._zoom = MIN_ZOOM
+        self._offset = QPointF(0, 0)
+        self._dragging = False
+        self._drag_start = QPointF(0, 0)
+        self._offset_start = QPointF(0, 0)
+        self._single_page = True
+        self.setMouseTracking(True)
+        self.setCursor(Qt.OpenHandCursor)
+        self.setStyleSheet('background-color: #e0e0e0; border: none;')
+        self.setMinimumSize(200, 200)
+
+    def set_page(self, left_pixmap, right_pixmap=None):
+        """Set pages for display.
+
+        Args:
+            left_pixmap: QPixmap for the left page.
+            right_pixmap: QPixmap for the right page. If None,
+                renders a single centered page.
+        """
+        self._full_left = left_pixmap
+        self._full_right = right_pixmap
+        self._single_page = (right_pixmap is None)
+        self._zoom = MIN_ZOOM
+        self._offset = QPointF(0, 0)
+        self._rebuild_display()
+        self.update()
+
+    def clear_page(self):
+        self._full_left = None
+        self._full_right = None
+        self._display_left = None
+        self._display_right = None
+        self.update()
+
+    # ── layout math ──────────────────────────────────────────────────
+
+    def _base_size(self):
+        """Fit-to-widget size for a single page at zoom=1.0.
+
+        In dual-page mode the scale accounts for both pages plus gap,
+        so the full spread fits the widget at zoom=1.0.
+        """
+        if not self._full_left:
+            return 0, 0
+        pw = self._full_left.width()
+        ph = self._full_left.height()
+        ww = self.width()
+        wh = self.height()
+        if ww < 10 or wh < 10:
+            return pw, ph
+
+        if self._single_page:
+            scale = min(ww / pw, wh / ph)
+        else:
+            pw_r = self._full_right.width()
+            ph_r = self._full_right.height()
+            total_pw = pw + pw_r + self.GAP
+            max_ph = max(ph, ph_r)
+            scale = min(ww / total_pw, wh / max_ph)
+
+        return int(pw * scale), int(ph * scale)
+
+    def _rebuild_display(self):
+        """Rebuild display pixmaps at current zoom level."""
+        if not self._full_left:
+            self._display_left = None
+            self._display_right = None
+            return
+
+        bw, bh = self._base_size()
+        zoom = self._zoom
+        tw = int(bw * zoom)
+        th = int(bh * zoom)
+        if tw < 1 or th < 1:
+            self._display_left = None
+            self._display_right = None
+            return
+
+        self._display_left = self._full_left.scaled(
+            tw, th, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+        if self._full_right and not self._single_page:
+            # Use the same scale factor derived from the left page
+            scale = zoom * (bw / self._full_left.width())
+            tw_r = int(self._full_right.width() * scale)
+            th_r = int(self._full_right.height() * scale)
+            self._display_right = self._full_right.scaled(
+                tw_r, th_r, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self._display_gap = int(self.GAP * scale)
+        else:
+            self._display_right = None
+            self._display_gap = 0
+
+    def _total_display_size(self):
+        """Return (width, height) of the rendered spread in display pixels."""
+        if not self._display_left:
+            return 0, 0
+        w = self._display_left.width()
+        h = self._display_left.height()
+        if self._display_right:
+            w += self._display_gap + self._display_right.width()
+            h = max(h, self._display_right.height())
+        return w, h
+
+    # ── painting ─────────────────────────────────────────────────────
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), Qt.lightGray)
+
+        if not self._display_left:
+            painter.end()
+            return
+
+        tdw, tdh = self._total_display_size()
+
+        # Center the spread in widget, apply pan offset
+        cx = (self.width() - tdw) / 2.0 + self._offset.x()
+        cy = (self.height() - tdh) / 2.0 + self._offset.y()
+
+        if self._single_page:
+            painter.drawPixmap(int(cx), int(cy), self._display_left)
+        else:
+            # Left page — vertically centered within spread height
+            ly = cy + (tdh - self._display_left.height()) / 2.0
+            painter.drawPixmap(int(cx), int(ly), self._display_left)
+            # Right page
+            rx = cx + self._display_left.width() + self._display_gap
+            ry = cy + (tdh - self._display_right.height()) / 2.0
+            painter.drawPixmap(int(rx), int(ry), self._display_right)
+
+        painter.end()
+
+    # ── zoom / pan ───────────────────────────────────────────────────
+
+    def wheelEvent(self, event: QWheelEvent):
+        if not self._full_left:
+            return
+        pos = event.posF() if hasattr(event, 'posF') else QPointF(event.pos())
+        old_zoom = self._zoom
+
+        delta = event.angleDelta().y()
+        if delta > 0:
+            self._zoom = min(MAX_ZOOM, self._zoom + ZOOM_STEP)
+        elif delta < 0:
+            self._zoom = max(MIN_ZOOM, self._zoom - ZOOM_STEP)
+
+        if self._zoom == old_zoom:
+            return
+
+        ratio = self._zoom / old_zoom
+        center = QPointF(self.width() / 2.0, self.height() / 2.0)
+        rel = pos - center
+        self._offset = self._offset * ratio + rel * (1.0 - ratio)
+
+        if self._zoom <= MIN_ZOOM + 0.001:
+            self._offset = QPointF(0, 0)
+
+        self._clamp_offset()
+        self._rebuild_display()
+        self.update()
+
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.LeftButton and self._zoom > MIN_ZOOM + 0.001:
+            self._dragging = True
+            self._drag_start = QPointF(event.pos())
+            self._offset_start = QPointF(self._offset)
+            self.setCursor(Qt.ClosedHandCursor)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent):
+        if self._dragging:
+            delta = QPointF(event.pos()) - self._drag_start
+            self._offset = self._offset_start + delta
+            self._clamp_offset()
+            self.update()
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        if self._dragging and event.button() == Qt.LeftButton:
+            self._dragging = False
+            self.setCursor(Qt.OpenHandCursor if self._zoom > MIN_ZOOM + 0.001
+                           else Qt.ArrowCursor)
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
+
+    def _clamp_offset(self):
+        """Prevent the spread from drifting completely off-screen."""
+        tdw, tdh = self._total_display_size()
+        if tdw == 0:
+            return
+        margin = 100
+        max_x = (tdw + self.width()) / 2.0 + margin
+        max_y = (tdh + self.height()) / 2.0 + margin
+        self._offset.setX(max(-max_x, min(max_x, self._offset.x())))
+        self._offset.setY(max(-max_y, min(max_y, self._offset.y())))
+
+
 class PdfViewerPanel(QWidget):
     def __init__(self):
         super().__init__()
         self._docs = {}
         self._current_song = None
         self._current_page_offset = 0
+        self._fullscreen = False
         self._init_ui()
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        self.canvas = ScoreCanvas()
-        layout.addWidget(self.canvas, 1)
+        # Stacked widget to swap between single-page and dual-page canvases
+        self._canvas_stack = QStackedWidget()
+        self._single_canvas = ScoreCanvas()
+        self._dual_canvas = DualScoreCanvas()
+        self._canvas_stack.addWidget(self._single_canvas)  # index 0
+        self._canvas_stack.addWidget(self._dual_canvas)    # index 1
+        self.canvas = self._single_canvas  # convenience ref — always points to active canvas
+        layout.addWidget(self._canvas_stack, 1)
 
         nav_layout = QHBoxLayout()
         self.page_label = QLabel('')
@@ -239,6 +467,34 @@ class PdfViewerPanel(QWidget):
                 self._docs[volume] = fitz.open(path)
         return self._docs.get(volume)
 
+    def _render_page_pixmap(self, doc, page_idx):
+        """Render a single PDF page to QPixmap at RENDER_DPI."""
+        zoom = RENDER_DPI / 72.0
+        mat = fitz.Matrix(zoom, zoom)
+        pix = doc[page_idx].get_pixmap(matrix=mat)
+        img = QImage(pix.samples, pix.width, pix.height, pix.stride,
+                     QImage.Format_RGB888)
+        return QPixmap.fromImage(img)
+
+    def set_fullscreen(self, enabled):
+        """Toggle fullscreen dual-page mode.
+
+        When enabled, the dual-page canvas is shown and songs are
+        rendered two pages side-by-side. When disabled, reverts to
+        the single-page canvas.
+        """
+        if enabled == self._fullscreen:
+            return
+        self._fullscreen = enabled
+        if enabled:
+            self._canvas_stack.setCurrentWidget(self._dual_canvas)
+            self.canvas = self._dual_canvas
+        else:
+            self._canvas_stack.setCurrentWidget(self._single_canvas)
+            self.canvas = self._single_canvas
+        # Re-render current song in the new mode
+        self._render_current_page()
+
     def _render_current_page(self):
         if not self._current_song:
             return
@@ -259,20 +515,38 @@ class PdfViewerPanel(QWidget):
             self.page_label.setText('页码超出范围')
             return
 
-        page = doc[page_idx]
-        zoom = RENDER_DPI / 72.0
-        mat = fitz.Matrix(zoom, zoom)
-        pix = page.get_pixmap(matrix=mat)
-        img = QImage(pix.samples, pix.width, pix.height, pix.stride,
-                     QImage.Format_RGB888)
-        full_pixmap = QPixmap.fromImage(img)
-        self.canvas.set_page(full_pixmap)
+        if self._fullscreen:
+            # ── dual-page mode ──────────────────────────────────
+            left_pixmap = self._render_page_pixmap(doc, page_idx)
 
-        self.page_label.setText(
-            f'{self._current_page_offset + 1}/{total_pages}'
-            f'  (PDF p.{page_idx + 1})')
-        self.prev_btn.setEnabled(self._current_page_offset > 0)
-        self.next_btn.setEnabled(self._current_page_offset < total_pages - 1)
+            next_idx = page_idx + 1
+            if (next_idx < doc.page_count
+                    and self._current_page_offset + 1 < total_pages):
+                right_pixmap = self._render_page_pixmap(doc, next_idx)
+                visible_end = self._current_page_offset + 2
+            else:
+                right_pixmap = None
+                visible_end = self._current_page_offset + 1
+
+            self._dual_canvas.set_page(left_pixmap, right_pixmap)
+
+            self.page_label.setText(
+                f'{self._current_page_offset + 1}-{visible_end}/{total_pages}'
+                f'  (PDF p.{page_idx + 1})')
+            self.prev_btn.setEnabled(self._current_page_offset > 0)
+            self.next_btn.setEnabled(
+                self._current_page_offset + 1 < total_pages)
+        else:
+            # ── single-page mode ────────────────────────────────
+            pixmap = self._render_page_pixmap(doc, page_idx)
+            self._single_canvas.set_page(pixmap)
+
+            self.page_label.setText(
+                f'{self._current_page_offset + 1}/{total_pages}'
+                f'  (PDF p.{page_idx + 1})')
+            self.prev_btn.setEnabled(self._current_page_offset > 0)
+            self.next_btn.setEnabled(
+                self._current_page_offset < total_pages - 1)
 
     def _prev_page(self):
         if self._current_page_offset > 0:
