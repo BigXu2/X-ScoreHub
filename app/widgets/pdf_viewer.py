@@ -2,7 +2,7 @@ import os
 import fitz
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QStackedWidget)
-from PyQt5.QtCore import Qt, QPointF, QRectF
+from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal
 from PyQt5.QtGui import (QPixmap, QImage, QPainter, QMouseEvent,
                          QWheelEvent, QCursor)
 
@@ -398,6 +398,8 @@ class DualScoreCanvas(QWidget):
 
 
 class PdfViewerPanel(QWidget):
+    fullscreen_toggle_requested = pyqtSignal()
+
     def __init__(self):
         super().__init__()
         self._docs = {}
@@ -428,10 +430,16 @@ class PdfViewerPanel(QWidget):
         self.next_btn.clicked.connect(self._next_page)
         self.prev_btn.setEnabled(False)
         self.next_btn.setEnabled(False)
+        self.toggle_btn = QPushButton('切换显示模式')
+        self.toggle_btn.clicked.connect(self.fullscreen_toggle_requested.emit)
+        self.toggle_btn.setStyleSheet(
+            'QPushButton { min-height: 28px; font-size: 13px; }')
+
         nav_layout.addStretch()
         nav_layout.addWidget(self.prev_btn)
         nav_layout.addWidget(self.page_label)
         nav_layout.addWidget(self.next_btn)
+        nav_layout.addWidget(self.toggle_btn)
         nav_layout.addStretch()
         layout.addLayout(nav_layout)
 

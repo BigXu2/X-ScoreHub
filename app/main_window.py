@@ -85,6 +85,15 @@ class MainWindow(QMainWindow):
             QKeySequence(Qt.ControlModifier | Qt.MetaModifier | Qt.Key_F), self)
         self._fullscreen_shortcut.activated.connect(self._toggle_fullscreen)
 
+        # Cmd+F: focus search box (only when NOT in fullscreen score mode)
+        self._search_shortcut = QShortcut(
+            QKeySequence(Qt.MetaModifier | Qt.Key_F), self)
+        self._search_shortcut.activated.connect(self._focus_search)
+
+        # Connect PDF viewer's fullscreen toggle button
+        self.pdf_viewer.fullscreen_toggle_requested.connect(
+            self._toggle_fullscreen)
+
     def _on_song_selected(self, song_id):
         self.pdf_viewer.display_song(song_id)
         self.song_info.display_song(song_id)
@@ -158,6 +167,13 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.warning(self, '导出失败', str(e))
 
+    def _focus_search(self):
+        """Focus the search box (Cmd+F), only outside score fullscreen."""
+        if self.pdf_viewer._fullscreen:
+            return
+        self.song_list.search_box.setFocus()
+        self.song_list.search_box.selectAll()
+
     def _toggle_fullscreen(self):
         """Toggle between normal three-panel layout and fullscreen score view.
 
@@ -183,6 +199,12 @@ class MainWindow(QMainWindow):
 
     def keyPressEvent(self, event):
         key = event.key()
+
+        # ESC exits system fullscreen (window fullscreen, not score fullscreen)
+        if key == Qt.Key_Escape and self.isFullScreen():
+            self.showNormal()
+            return
+
         if key in (Qt.Key_Left, Qt.Key_Right):
             fw = self.focusWidget()
             if isinstance(fw, (QLineEdit, QTextEdit, QAbstractSpinBox)):
