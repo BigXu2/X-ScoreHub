@@ -1,7 +1,8 @@
 import sqlite3
 import os
+from app.utils import resource_path
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'scores.db')
+DB_PATH = resource_path('scores.db')
 
 def get_connection():
     conn = sqlite3.connect(DB_PATH)

@@ -7,9 +7,9 @@ from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal, QEvent, QDateTime
 from PyQt5.QtGui import (QPixmap, QImage, QPainter, QMouseEvent,
                          QWheelEvent, QCursor, QNativeGestureEvent)
 from PyQt5.QtWidgets import QGestureEvent, QPinchGesture
+from app.utils import resource_path
 
-PDF_REPO = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))), 'pdf_repo')
+PDF_REPO = resource_path('pdf_repo')
 
 RENDER_DPI = 200
 MIN_ZOOM = 1.0

@@ -20,3 +20,8 @@ pdf_repo/
 
 # OCR intermediate results (large JSON)
 ocr_results.json
+
+# PyInstaller build artifacts
+build/
+dist/
+*.tar.gz

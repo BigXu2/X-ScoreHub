@@ -6,9 +6,9 @@ from PyQt5.QtCore import pyqtSignal
 import os
 import re
 import app.database as db
+from app.utils import resource_path
 
-PDF_REPO = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))), 'pdf_repo')
+PDF_REPO = resource_path('pdf_repo')
 
 DIFFICULTY_STARS = ['', '★', '★★', '★★★', '★★★★', '★★★★★', '★★★★★★', '★★★★★★★', '★★★★★★★★', '★★★★★★★★★']
 

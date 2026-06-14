@@ -1,15 +1,13 @@
 import sys
 import os
-
-# Ensure the project root is on the path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from app.utils import resource_path
 
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QPainterPath
 from PyQt5.QtCore import Qt
 import app.database as db
 from app.main_window import MainWindow
-ICON_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'X-ScoreHub.png')
+ICON_FILE = resource_path('X-ScoreHub.png')
 
 
 def main():
